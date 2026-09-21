@@ -37,6 +37,10 @@ repository (useful to give a remote hook time to pick up the push):
     afterPushDelay = 10
 
 If the `[all]` header is absent the delay defaults to 0 (no waiting).
+
+The delay is only applied when the push actually transferred something
+to the remote; a `git push` that reports "Everything up-to-date"
+(nothing was pushed) is never followed by a wait.
 """
 
 import json
@@ -168,6 +172,29 @@ def commit_lock(path: str, names: list[str]) -> None:
     run(["git", "commit", "-m", msg], cwd=path)
 
 
+def push(path: str) -> bool:
+    """Run `git push -u origin main` in `path` and print its output.
+
+    Returns True if the push actually transferred something to the remote;
+    returns False if the remote was already up to date (git printed
+    "Everything up-to-date"), i.e. nothing was pushed.
+    """
+    cmd = ["git", "push", "-u", "origin", "main"]
+    print(f"reload-flakes: running: {' '.join(cmd)}  (in {path})")
+    proc = subprocess.run(cmd, cwd=path, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # git writes its push status ("Everything up-to-date", "Pushing to ...",
+    # error messages, ...) on stderr; reproduce both streams verbatim.
+    sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(
+            proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr)
+    return "Everything up-to-date" not in proc.stderr
+
+
 def validate(repos: list[dict]) -> None:
     for i, repo in enumerate(repos):
         label = f"repository #{i + 1} ({repo['path']})"
@@ -235,8 +262,11 @@ def main() -> None:
         else:
             print(f"reload-flakes: no inputs declared for {path}, skipping update")
         if repo["push"]:
-            run(["git", "push", "-u", "origin", "main"], cwd=path)
-            if after_push_delay > 0:
+            pushed_something = push(path)
+            if not pushed_something:
+                print("reload-flakes: nothing was pushed (remote up to date), "
+                      "skipping afterPushDelay")
+            elif after_push_delay > 0:
                 print(f"reload-flakes: waiting {after_push_delay:g} seconds "
                       f"after push (all.afterPushDelay)")
                 time.sleep(after_push_delay)
