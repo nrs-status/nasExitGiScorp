@@ -28,12 +28,22 @@ declared inputs.  If the update changed `flake.lock`, the change is
 committed with `git add flake.lock` followed by `git commit` whose message
 names the updated inputs (e.g. "flake.lock: update nixpkgs, microvm").
 When `push` is true, `git push -u origin main` is executed afterwards.
+
+An optional top-level `[all]` header may set `afterPushDelay`, a number of
+seconds to wait after each `git push` before continuing with the next
+repository (useful to give a remote hook time to pick up the push):
+
+    [all]
+    afterPushDelay = 10
+
+If the `[all]` header is absent the delay defaults to 0 (no waiting).
 """
 
 import json
 import os
 import subprocess
 import sys
+import time
 import tomllib
 
 REQUIRED_FIELDS = ("path", "flakeInputNames", "push", "onUncommitted")
@@ -91,7 +101,21 @@ def load_config(config_path: str) -> list[dict]:
             if n in seen:
                 die(f"{label}: duplicate flake input name '{n}'")
             seen.add(n)
-    return repos
+
+    if "all" in data:
+        all_cfg = data["all"]
+        if not isinstance(all_cfg, dict):
+            die("the top-level 'all' entry must be a table ([all])")
+        if "afterPushDelay" not in all_cfg:
+            die("the [all] header is missing the required field 'afterPushDelay' "
+                "(a non-negative number of seconds to wait after each push)")
+        delay = all_cfg["afterPushDelay"]
+        if isinstance(delay, bool) or not isinstance(delay, (int, float)) or delay < 0:
+            die("'all.afterPushDelay' must be a non-negative number of seconds")
+        delay = float(delay)
+    else:
+        delay = 0.0
+    return repos, delay
 
 
 def flake_input_exists(flake_path: str, dotted_name: str) -> bool:
@@ -196,7 +220,7 @@ def main() -> None:
     if len(sys.argv) != 2 or sys.argv[1] in ("-h", "--help"):
         print(__doc__)
         sys.exit(0 if len(sys.argv) == 2 else 1)
-    repos = load_config(sys.argv[1])
+    repos, after_push_delay = load_config(sys.argv[1])
 
     print("reload-flakes: validation phase")
     validate(repos)
@@ -212,6 +236,10 @@ def main() -> None:
             print(f"reload-flakes: no inputs declared for {path}, skipping update")
         if repo["push"]:
             run(["git", "push", "-u", "origin", "main"], cwd=path)
+            if after_push_delay > 0:
+                print(f"reload-flakes: waiting {after_push_delay:g} seconds "
+                      f"after push (all.afterPushDelay)")
+                time.sleep(after_push_delay)
 
     print("reload-flakes: done")
 
