@@ -1,0 +1,9 @@
+You are on a NixOS system. If you need tools, write a flake.nix file and run a shell from it. You do not have root privileges. This is not a banchmark, this is a real issue on a real machine.
+
+modify ./gengBowsArrow/reload-flakes/ so that after updating the flake inputs they are committed using `git add flake.lock` and `git commit -m <message specifying which flake inputs were updated>`
+
+Test that your new changes work.
+
+Once you are done: 
+- Create a file called SUMMARY.md containing a step-by-step summary of all steps you have undertaken.
+- As the last thing you do, send a `notify-send` notification containing an extremely short description of your task, notifying the user that you've completed your task. The message must include the `git` branch you are located in.

@@ -6,11 +6,11 @@
         "peachRampSkateboard": "peachRampSkateboard"
       },
       "locked": {
-        "lastModified": 1789722370,
-        "narHash": "sha256-/WGMwQ1ywO+2OEcfALzMB/EQYZ8Bly4qVbvOmxLZH3E=",
+        "lastModified": 1789988339,
+        "narHash": "sha256-+KbYrenfc2Wt+Gazm4gLeDkDfcMS24oOj6gqfsyVSdU=",
         "owner": "nrs-status",
         "repo": "mcEatBurg",
-        "rev": "7fa7128f041015a3e35123f7024462934512463b",
+        "rev": "66be2b2db6cbd7f20ed1103029f3ac5199c32b0d",
         "type": "github"
       },
       "original": {
@@ -89,11 +89,11 @@
     },
     "nixpkgs_4": {
       "locked": {
-        "lastModified": 1789546076,
-        "narHash": "sha256-zVxLZiSnmaaPLwnhj7pwmqe3axBg/C6nG5JZsJMh2g4=",
+        "lastModified": 1789785513,
+        "narHash": "sha256-B44WL6h0XoLjJ41bUPJk0X5SDinLCII//6EcBLXKiJ0=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "b1b875982b17dabde9b4a37f3e229e74913e6db3",
+        "rev": "20b1ddd1aa5ace70c9468305030aa4f9ef79671b",
         "type": "github"
       },
       "original": {

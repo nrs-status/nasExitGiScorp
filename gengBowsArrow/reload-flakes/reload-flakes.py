@@ -23,8 +23,10 @@ For every declared repository the program first validates:
 Only after *all* repositories validated does the update phase start.  The
 repositories are visited sequentially, in the order they were declared in
 the TOML file; for each one `nix flake update` is run for *only* the
-declared inputs, and, when `push` is true, `git push -u origin main` is
-executed afterwards.
+declared inputs.  If the update changed `flake.lock`, the change is
+committed with `git add flake.lock` followed by `git commit` whose message
+names the updated inputs (e.g. "flake.lock: update nixpkgs, microvm").
+When `push` is true, `git push -u origin main` is executed afterwards.
 """
 
 import json
@@ -125,6 +127,22 @@ def flake_input_exists(flake_path: str, dotted_name: str) -> bool:
     return True
 
 
+def commit_lock(path: str, names: list[str]) -> None:
+    """Stage and commit `flake.lock` if the update changed it."""
+    run(["git", "add", "flake.lock"], cwd=path)
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=path, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if staged.returncode != 0:
+        die(f"in '{path}': git diff --cached failed:\n{staged.stderr.strip()}")
+    if "flake.lock" not in staged.stdout.splitlines():
+        print("reload-flakes: flake.lock unchanged, nothing to commit")
+        return
+    msg = "flake.lock: update " + ", ".join(names)
+    run(["git", "commit", "-m", msg], cwd=path)
+
+
 def validate(repos: list[dict]) -> None:
     for i, repo in enumerate(repos):
         label = f"repository #{i + 1} ({repo['path']})"
@@ -174,6 +192,7 @@ def main() -> None:
         print(f"== [{i + 1}/{len(repos)}] {path} ==")
         if names:
             run(["nix", "flake", "update", *names], cwd=path)
+            commit_lock(path, names)
         else:
             print(f"reload-flakes: no inputs declared for {path}, skipping update")
         if repo["push"]:
