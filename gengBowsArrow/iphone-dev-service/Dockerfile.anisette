@@ -1,0 +1,13 @@
+# Derived anisette-server image.
+#
+# Dadoum's anisette-server image ships the `anisette_server` binary but not the
+# `libplist` it dlopen()s while provisioning the Apple ADI machine, so it aborts
+# with:
+#   dynamicloader.LibraryLoadingException: Cannot load ... libplist-2.0.so.4
+# Installing the Debian `libplist-2.0-4` package fixes it.
+FROM docker.io/dadoum/anisette-server:latest
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libplist-2.0-4 \
+ && rm -rf /var/lib/apt/lists/*
+USER Chester

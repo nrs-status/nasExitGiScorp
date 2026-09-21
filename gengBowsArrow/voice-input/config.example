@@ -1,0 +1,44 @@
+# voice-input configuration file
+#
+# Searched in this order:
+#   $VOICE_INPUT_CONFIG
+#   ${XDG_CONFIG_HOME:-~/.config}/voice-input/config
+#
+# Format: 'key = value' lines; '#' comments and blank lines are ignored.
+# Precedence (highest wins): environment variables -> this file -> defaults.
+#   env: OPENROUTER_API_KEY, OPENROUTER_API_KEY_FILE, OPENROUTER_MODEL,
+#        OPENROUTER_API_URL
+
+# --- OpenRouter API call -------------------------------------------------
+
+# Endpoint the transcription request is POSTed to.
+api_url = https://openrouter.ai/api/v1/chat/completions
+
+# OpenRouter model used for transcription (must accept audio input).
+model = google/gemini-2.5-flash
+
+# File the OpenRouter API key is read from (single line).
+# The key can also come from $OPENROUTER_API_KEY directly.
+api_key_file = /run/secrets/keys/openrouter
+
+# Instruction sent to the model together with the audio.
+prompt = Transcribe this audio to plain text. Output only the transcription.
+
+# --- Output processing ----------------------------------------------------
+
+# If set, the transcription text is piped through this shell command
+# (text on stdin, transformed text from stdout) before it is printed and
+# inputted (typed) at the cursor. Comment out to disable.
+#pipe_command = sed -e 's/um //g' -e 's/uh //g'
+#pipe_command = tr a-z A-Z
+
+# --- Recording archive ----------------------------------------------------
+
+# Directory recordings are automatically archived to: <name>.wav audio plus
+# <name>.txt transcription, named after the moment the recording began.
+# The directory is created if it does not exist; errors here are fatal.
+#save_directory = /home/me/voice-logs
+
+# Maximum number of recordings kept in 'save_directory' (the most recent ones
+# are kept, including the newest). 0 disables the archive entirely.
+save_limit = 0

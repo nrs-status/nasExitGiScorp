@@ -1,0 +1,23 @@
+cabal-version:      2.4
+name:               pi-json-span-processor
+version:            0.1.0.0
+synopsis:           Aggregates the pi --mode json event stream into span events
+description:        Reads the JSON-lines event stream emitted by `pi --mode json`
+                    and aggregates it into another stream of JSON values
+                    representing spans (agent, turn, message, tool_execution).
+license:            MIT
+build-type:         Simple
+
+executable pi-json-span-processor
+    main-is:          Main.hs
+    hs-source-dirs:   src
+    default-language: Haskell2010
+    ghc-options:      -Wall -O2
+    build-depends:    base >=4 && <5
+                    , bytestring
+                    , containers
+                    , text
+                    , time
+                    , aeson
+                    , scientific
+                    , vector

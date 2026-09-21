@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>            <string>@BUNDLE_ID@</string>
+  <key>CFBundleName</key>                  <string>@APP_NAME@</string>
+  <key>CFBundleDisplayName</key>           <string>HelloCamera</string>
+  <key>CFBundleExecutable</key>            <string>@APP_NAME@</string>
+  <key>CFBundlePackageType</key>           <string>APPL</string>
+  <key>CFBundleShortVersionString</key>    <string>1.0</string>
+  <key>CFBundleVersion</key>               <string>1</string>
+  <key>MinimumOSVersion</key>              <string>15.0</string>
+  <key>UIDeviceFamily</key>                <array><integer>1</integer></array>
+  <key>UILaunchScreen</key>                <dict/>
+  <key>UISupportedInterfaceOrientations</key>
+  <array><string>UIInterfaceOrientationPortrait</string></array>
+
+  <!-- required: iOS terminates the app if it uses the camera without this -->
+  <key>NSCameraUsageDescription</key>
+  <string>HelloCamera uses the camera to capture photos.</string>
+
+  <!-- required to talk to services on the local network (e.g. a Garage S3 API) -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>HelloCamera talks to a local object store.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_http._tcp</string>
+    <string>_s3._tcp</string>
+  </array>
+
+  <!-- Garage and most LAN services speak plain HTTP -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>      <true/>
+    <key>NSAllowsLocalNetworking</key>     <true/>
+  </dict>
+</dict>
+</plist>

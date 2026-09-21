@@ -1,0 +1,40 @@
+# Example configuration for tiles.py — 30 tiles.
+# Every entry under [tiles] becomes a tile; the table key is used as the
+# name unless "name" is given. Keys may be set with "key = "<char>""
+# (otherwise they are auto-assigned in reading order).
+
+title = "example launcher"
+
+[tiles]
+"1" = { name = "Date & time",    command = "date" }
+"2" = { name = "Uptime",         command = "uptime" }
+"3" = { name = "Who am I",       command = "whoami; id" }
+"4" = { name = "Hostname",       command = "hostnamectl || hostname" }
+"5" = { name = "Kernel",         command = "uname -a" }
+"6" = { name = "Disk usage",     command = "df -h /" }
+"7" = { name = "Memory",         command = "free -h" }
+"8" = { name = "CPU info",       command = "lscpu | head -12" }
+"0" = { name = "Processes",      command = "ps aux --sort=-%cpu | head -15" }
+
+"q" = { name = "List files",     command = "ls -lah" }
+"w" = { name = "Tree (2 deep)",  command = "find . -maxdepth 2 | sort | head -40" }
+"e" = { name = "Biggest files",  command = "du -ah . 2>/dev/null | sort -rh | head -15" }
+"r" = { name = "Git status",     command = "git status && git log --oneline -5" }
+"t" = { name = "Git diff",       command = "git diff --stat" }
+"y" = { name = "Env variables",  command = "env | sort | head -30" }
+"u" = { name = "Net interfaces", command = "ip -brief addr" }
+"i" = { name = "Listening ports",command = "ss -tulnp 2>/dev/null | head -15 || netstat -tulnp" }
+"o" = { name = "Ping gateway",   command = "ping -c 3 $(ip route | awk '/default/{print $3; exit}')" }
+"p" = { name = "Public IP",      command = "curl -s --max-time 5 ifconfig.me; echo" }
+
+"a" = { name = "Echo piped stdin", command = "echo '--- piped input: ---'; cat; echo '--- end ---'" }
+"s" = { name = "Word count",     command = "wc -lwm" }
+"d" = { name = "Sort lines",     command = "sort | uniq -c | sort -rn" }
+"f" = { name = "ROT13",          command = "tr 'A-Za-z' 'N-ZA-Mn-za-m'" }
+"g" = { name = "Hex dump",       command = "xxd | head -20" }
+"h" = { name = "Base64 encode",  command = "base64" }
+"j" = { name = "Line numbers",   command = "cat -n" }
+"k" = { name = "Uppercase",      command = "tr '[:lower:]' '[:upper:]'" }
+"l" = { name = "SHA-256",        command = "sha256sum" }
+"z" = { name = "Last logins",    command = "last -n 5 2>/dev/null || who" }
+"x" = { name = "Calendar",       command = "cal" }
