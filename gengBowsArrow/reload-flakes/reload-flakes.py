@@ -11,8 +11,9 @@ Takes a single argument: the path to a TOML configuration file of the shape:
 
 For every declared repository the program first validates:
 
-  * `path` points at a directory containing a flake.nix,
-  * it is a git work tree,
+  * `path` points at a directory containing a flake.nix and a flake.lock,
+  * it is the root of a proper git repository (a git work tree whose
+    top level is exactly `path`, not merely a subdirectory of one),
   * every name in `flakeInputNames` is an actual input of that flake
     (direct inputs, or nested ones addressed with dotted names such as
     "someInput.someSubInput", which is exactly what `nix flake update`
@@ -152,13 +153,27 @@ def validate(repos: list[dict]) -> None:
             die(f"{label}: not a directory")
         if not os.path.isfile(os.path.join(path, "flake.nix")):
             die(f"{label}: no flake.nix found, '{path}' is not a nix flake")
+        if not os.path.isfile(os.path.join(path, "flake.lock")):
+            die(f"{label}: no flake.lock found in '{path}' "
+                f"(run 'nix flake lock' there first)")
 
         proc = subprocess.run(
             ["git", "-C", path, "rev-parse", "--is-inside-work-tree"],
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         if proc.returncode != 0 or proc.stdout.strip() != "true":
-            die(f"{label}: not inside a git work tree:\n{proc.stderr.strip()}")
+            die(f"{label}: not a git repository:\n{proc.stderr.strip()}")
+        # A directory merely *inside* someone else's work tree must not
+        # count: require that the work tree's top level is exactly `path`.
+        proc = subprocess.run(
+            ["git", "-C", path, "rev-parse", "--show-toplevel"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        toplevel = proc.stdout.strip()
+        if proc.returncode != 0 or not toplevel or \
+                os.path.realpath(toplevel) != os.path.realpath(path):
+            die(f"{label}: '{path}' is not the root of a git repository "
+                f"(git top level is '{toplevel or 'unknown'}')")
 
         for name in repo["flakeInputNames"]:
             if not flake_input_exists(path, name):
