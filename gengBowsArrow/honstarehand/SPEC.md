@@ -3,7 +3,7 @@
 ## 1. Overview
 
 `honstarehand` is a command line tool (written in Haskell) that manages runs of the
-pi microvm runner `run-pi-microvm` (from the `frontArmToPlane` flake) whose
+pi microvm runner `run-pi-microvm` (from the `nixExitGiScorp` flake) whose
 configuration lives in the `runConfigs` attribute set of a nix flake. Every
 run is tracked in a postgresql `run` table, from creation to completion.
 
