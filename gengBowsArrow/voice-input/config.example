@@ -42,3 +42,13 @@ prompt = Transcribe this audio to plain text. Output only the transcription.
 # Maximum number of recordings kept in 'save_directory' (the most recent ones
 # are kept, including the newest). 0 disables the archive entirely.
 save_limit = 0
+
+# --- Console mode ---------------------------------------------------------
+
+# Adapted to a bare console / terminal with no window manager: no notify-send
+# and no wtype.  Status messages go to stderr and the tmux status line, and
+# the transcription is typed into the active tmux pane with 'tmux send-keys'.
+# Any of yes/true/on/1 enables it, anything else disables it.
+# Can also be enabled per-invocation with 'voice-input --console ...' or by
+# exporting VOICE_INPUT_CONSOLE=1 (highest precedence).
+#console = no

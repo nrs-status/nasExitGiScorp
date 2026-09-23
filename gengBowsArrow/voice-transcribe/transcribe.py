@@ -66,6 +66,14 @@ Config format ('key = value' lines; '#' comments and blank lines ignored):
       not exist. Errors in this stage are fatal and abort the program.
       Default: unset (no archiving)
       Example: save_directory = /home/me/voice-logs
+  console = yes|no
+      Console mode flag, consumed by the voice-input push-to-talk script
+      (switches it from notify-send/wtype to console output and tmux
+      send-keys; see ../voice-input).  Accepted here so a shared
+      configuration file parses, but it has no effect on the transcription
+      itself.  Anything other than yes/true/on/1 means no.
+      Default: 0
+      Example: console = yes
   save_limit = <n>
       Maximum number of voice recordings kept in 'save_directory'. When the
       limit is reached the most recent recordings are kept (including the
@@ -233,6 +241,11 @@ DEFAULTS = {
     "pipe_command": None,
     "save_directory": None,
     "save_limit": "0",
+    #consumed by voice-input (../voice-input): switches it to console mode
+    #(stderr/tmux reporting, tmux send-keys insertion instead of
+    #notify-send/wtype).  Accepted so a shared configuration file parses,
+    #but it has no effect on the transcription itself.
+    "console": "no",
 }
 
 #file name extensions of the archived recording (.wav) and its transcription (.txt)
