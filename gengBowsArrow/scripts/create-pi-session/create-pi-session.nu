@@ -50,9 +50,21 @@ def main [branch: string, model?: string] {
     # The file is created/edited relative to the script's call site so editor
     # completion (e.g. for paths) is relative to that directory.
     print $"Opening editor to write (ansi cyan)instructions.txt(ansi reset) in (ansi cyan)($env.PWD)(ansi reset) - save and quit to continue..."
-    let nvimed = (do { ^nvim instructions.txt } | complete)
-    if $nvimed.exit_code != 0 {
-        print $"(ansi red)Error:(ansi reset) nvim exited with code ($nvimed.exit_code); aborting without creating a session."
+    # nvim must be run interactively: wrapping it in `complete' (like the
+    # non-interactive calls elsewhere in this script) redirects its stdout to
+    # a pipe, in which case neovim decides it is being driven over stdio,
+    # spawns an `--embed' instance and blocks forever waiting for RPC traffic
+    # that never arrives - i.e. the script hangs.  In nushell a non-zero exit
+    # code of an external command raises a catchable error, so `try'/`catch'
+    # replaces `complete' here while keeping the terminal attached.
+    let nvimed = (try {
+        ^nvim instructions.txt
+        0
+    } catch {|err|
+        $err.exit_code? | default 1
+    })
+    if $nvimed != 0 {
+        print $"(ansi red)Error:(ansi reset) nvim exited with code ($nvimed); aborting without creating a session."
         exit 1
     }
     # If the editor did not save any content (or quit without creating the
