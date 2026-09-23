@@ -7,8 +7,12 @@ set -euo pipefail
 # session options of a tmux session.  `taskmux' replaces the previous
 # four separate scripts:
 #
-#   taskmux start <task-description> [tmux-session]
+#   taskmux start [task-description] [tmux-session]
 #       (was: task-underway) marks a session as having a task underway.
+#       Without a task description the current git branch's name is
+#       used; outside a git repository `start' with no argument is an
+#       error: it prints a message and exits with status 1 without
+#       marking anything.
 #   taskmux done [tmux-session]
 #       (was: task-done) marks a session's task as complete.
 #   taskmux list
@@ -20,7 +24,7 @@ set -euo pipefail
 #       (was: remove-task-state) unsets a session's task state.
 
 usage() {
-	echo "usage: taskmux start <task-description> [tmux-session]" >&2
+	echo "usage: taskmux start [task-description] [tmux-session]" >&2
 	echo "       taskmux done [tmux-session]" >&2
 	echo "       taskmux list" >&2
 	echo "       taskmux clear [tmux-session]" >&2
@@ -32,10 +36,21 @@ current_session() {
 }
 
 cmd_start() {
-	if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
+	if [ "$#" -gt 2 ]; then
 		usage
 	fi
-	description=$1
+	if [ "$#" -ge 1 ]; then
+		description=$1
+	else
+		# No description given: fall back to the current git branch's
+		# name.  Outside a git repository (or on a detached HEAD, where
+		# there is no branch name), fail with an error instead of
+		# marking any session.
+		if ! description=$(git symbolic-ref --short HEAD 2>/dev/null); then
+			echo "taskmux start: not in a git repository (or no current branch); a task description is required" >&2
+			exit 1
+		fi
+	fi
 	session=${2:-$(current_session)}
 
 	tmux set-option -t "$session" @task-status "underway"

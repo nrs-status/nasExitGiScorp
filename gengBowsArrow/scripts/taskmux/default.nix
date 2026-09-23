@@ -18,6 +18,9 @@ pkgs.writeShellApplication {
     # coreutils (stty): needed by `taskmux list' to put the terminal in
     # raw mode for the interactive j/k selection.
     pkgs.coreutils
+    # git: needed by `taskmux start' with no argument, which defaults
+    # the task description to the current git branch's name.
+    pkgs.git
   ];
   text = builtins.readFile ./taskmux.sh;
 }
