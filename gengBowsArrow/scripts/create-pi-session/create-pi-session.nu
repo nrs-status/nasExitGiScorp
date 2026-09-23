@@ -1,13 +1,27 @@
 #!/usr/bin/env nushell
-# create-pi-session <GIT BRANCH NAME> <MODEL NAME>
+# create-pi-session <GIT BRANCH NAME> [<MODEL NAME>]
 #
 # Creates a new git worktree (via `wt switch --create`) based on the current
 # branch, lets you write instructions.txt for it with `vipe`, then opens a
 # tmux session (via `sesh connect`) containing two windows:
 #   1. `pi "Read and execute ./instructions.txt" --model <MODEL>`
 #   2. a plain shell at the new worktree
+#
+# The model may be given as the optional second argument; if omitted, it is
+# read from the DEFAULT_PI_MODEL environment variable.
 
-def main [branch: string, model: string] {
+def main [branch: string, model?: string] {
+    # --- 0. Resolve the model: second argument, else DEFAULT_PI_MODEL env var -
+    let model = (if $model == null {
+        let env_model = ($env.DEFAULT_PI_MODEL? | default "" | str trim)
+        if ($env_model | is-empty) {
+            print $"(ansi red)Error:(ansi reset) no model given. Pass a model argument or set the DEFAULT_PI_MODEL environment variable."
+            exit 1
+        }
+        $env_model
+    } else {
+        $model
+    })
     # --- 1. Validate that the first argument is a valid Git branch name -------
     let check = (do { git check-ref-format --branch $branch } | complete)
     if $check.exit_code != 0 {

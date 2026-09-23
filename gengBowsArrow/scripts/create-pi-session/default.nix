@@ -1,9 +1,10 @@
 { pkgs, pkgsLib, ... }:
-# create-pi-session <GIT BRANCH NAME> <MODEL NAME>: creates a git worktree
+# create-pi-session <GIT BRANCH NAME> [<MODEL NAME>]: creates a git worktree
 # (via worktrunk's `wt switch --create`), lets you write instructions.txt for
 # it with `vipe`, then opens a tmux session (via `sesh connect`) containing
 # two windows: one running `pi "Read and execute ./instructions.txt"` with the
-# given model, and one plain shell at the new worktree.
+# model (optional second argument or DEFAULT_PI_MODEL environment variable),
+# and one plain shell at the new worktree.
 let
 	script = pkgs.writeText "create-pi-session.nu" (builtins.readFile ./create-pi-session.nu);
 in pkgs.writeShellApplication {
