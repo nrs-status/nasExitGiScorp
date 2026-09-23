@@ -1,0 +1,20 @@
+# taskmux <subcommand> ...: a single script for managing tmux task state,
+# unifying the previous four scripts:
+#   start -> task-underway: marks a tmux session as having a task
+#     underway, via the `@task-status' / `@task-description' session
+#     options.
+#   done -> task-done: marks a tmux session's task as complete, via the
+#     `@task-status' session option.
+#   list -> list-tasked-sessions: lists every tmux session carrying a
+#     task state.
+#   clear -> remove-task-state: unsets the task-state session options of
+#     a tmux session.
+{ pkgs, ... }:
+pkgs.writeShellApplication {
+  name = "taskmux";
+  runtimeInputs = [
+    pkgs.tmux
+    pkgs.gawk
+  ];
+  text = builtins.readFile ./taskmux.sh;
+}
