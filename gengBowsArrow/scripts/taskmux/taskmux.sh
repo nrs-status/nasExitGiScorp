@@ -20,6 +20,10 @@ set -euo pipefail
 #       session: <session>: <status> - <description>.  On a terminal
 #       the listing becomes a selectable menu: j/k moves the cursor,
 #       Return switches to the selected session, q/Escape quits.
+#       The listing refreshes every three seconds and its output is
+#       updated whenever the session state (the @task-status /
+#       @task-description options or the set of tasked sessions)
+#       changes.
 #   taskmux clear [tmux-session]
 #       (was: remove-task-state) unsets a session's task state.
 
@@ -71,40 +75,85 @@ cmd_list() {
 		usage
 	fi
 
+	# The listing refreshes at this interval (in seconds) and is
+	# redrawn only when the session state actually changed.
+	local refresh_secs=3
+
+	# Query the current task state of every session as
+	# "<name>\t<name>: <status> - <description>" lines; empty output
+	# when no tmux server is running (no sessions, hence no tasked
+	# sessions) or no session carries a task state.  (`|| true': if
+	# the server goes away between refreshes the fetch must simply
+	# yield an empty result instead of aborting the script under
+	# `set -e' / `pipefail'.)
+	list_fetch() {
+		{ tmux list-sessions -F "#{session_name}	#{@task-status}	#{@task-description}" 2>/dev/null || true; } |
+			awk -F '\t' '$2 != "" { printf "%s\t%s: %s - %s\n", $1, $1, $2, $3 }'
+	}
+
+	# Split the fetched lines into the parallel `names'/`entries'
+	# arrays.  The bare name is kept alongside the display line because
+	# it is needed for `tmux switch-client'; session names cannot
+	# contain ':' but descriptions may, so the display line alone is
+	# not enough to recover the name.
+	local row out rendered=''
+	local -a names=() entries=()
+	list_split() {
+		names=()
+		entries=()
+		while IFS= read -r row; do
+			[ -n "$row" ] || continue
+			names+=("${row%%$'\t'*}")
+			entries+=("${row#*$'\t'}")
+		done
+	}
+
 	if ! tmux list-sessions >/dev/null 2>&1; then
 		# No tmux server running: no sessions, hence no tasked sessions.
 		exit 0
 	fi
 
-	# Each row is "<name>\t<name>: <status> - <description>".  The bare
-	# name is kept alongside the display line because it is needed for
-	# `tmux switch-client'; session names cannot contain ':' but
-	# descriptions may, so the display line alone is not enough to
-	# recover the name.
-	local row
-	local -a names=() entries=()
-	while IFS= read -r row; do
-		names+=("${row%%$'\t'*}")
-		entries+=("${row#*$'\t'}")
-	done < <(
-		tmux list-sessions -F "#{session_name}	#{@task-status}	#{@task-description}" |
-			awk -F '\t' '$2 != "" { printf "%s\t%s: %s - %s\n", $1, $1, $2, $3 }'
-	)
-
-	if [ "${#names[@]}" -eq 0 ]; then
+	out=$(list_fetch)
+	if [ -z "$out" ]; then
 		return 0
 	fi
+	rendered=$out
+	list_split <<<"$out"
 
-	# Non-interactive fallback: plain listing, as before.
+	# Non-interactive fallback: plain listing, refreshed every
+	# $refresh_secs seconds.  The listing is only (re)printed when the
+	# session state changed; on a terminal the previous listing is
+	# erased first, while with redirected output each changed listing
+	# is simply printed in full.
 	if [ ! -t 0 ] || [ ! -t 2 ]; then
+		local lines=${#entries[@]}
 		printf '%s\n' "${entries[@]}"
-		return 0
+		while :; do
+			sleep "$refresh_secs"
+			out=$(list_fetch)
+			if [ "$out" = "$rendered" ]; then
+				continue
+			fi
+			rendered=$out
+			list_split <<<"$out"
+			if [ -t 1 ] && [ "$lines" -gt 0 ]; then
+				printf '\033[%dA\033[J' "$lines"
+			fi
+			lines=${#entries[@]}
+			if [ "$lines" -gt 0 ]; then
+				printf '%s\n' "${entries[@]}"
+			fi
+		done
 	fi
 
 	# Interactive selection: j/k (or the arrow keys) move the cursor,
 	# Return switches the current tmux client to the selected session,
-	# q/Escape/Ctrl-C quits without switching.
+	# q/Escape/Ctrl-C quits without switching.  While waiting for a key
+	# the menu refreshes every $refresh_secs seconds: the key wait
+	# simply times out, the session state is re-fetched and the menu is
+	# redrawn if (and only if) anything changed.
 	local count=${#names[@]} sel=0 key='' rest='' chosen=''
+	local drawn_lines=0
 	local old_stty
 	old_stty=$(stty -g </dev/tty)
 	trap 'stty "$old_stty" </dev/tty' EXIT
@@ -118,8 +167,21 @@ cmd_list() {
 	list_draw() {
 		# On the first call simply draw; on later calls move the cursor
 		# back up over the previously drawn lines and clear them first.
-		if [ "$1" -eq 0 ]; then
-			printf '\033[%dA\033[J' "$((count + 1))"
+		# The menu occupies count + 1 lines (entries + footer); with no
+		# entries it is the two-line "no tasked sessions" notice plus
+		# footer.  The number of lines drawn last time is kept in
+		# `drawn_lines', since the erase must span the previous menu,
+		# not the (possibly shorter or longer) current one.
+		local first=$1
+		local lines=$((count > 0 ? count + 1 : 2))
+		if [ "$first" -eq 0 ]; then
+			printf '\033[%dA\033[J' "$drawn_lines"
+		fi
+		drawn_lines=$lines
+		if [ "$count" -eq 0 ]; then
+			printf 'no tasked sessions\n'
+			printf 'j/k: move, Return: switch, q: quit\n'
+			return
 		fi
 		local i
 		for ((i = 0; i < count; i++)); do
@@ -139,36 +201,56 @@ cmd_list() {
 		first=0
 		# -N (not -n): a literal newline (Enter, possibly translated
 		# from \r by ICRNL) must end up in "key" rather than being
-		# swallowed as an (empty) line terminator.
-		IFS= read -rsN1 -u 3 key || key=''
-		case "$key" in
-			j)
-				sel=$(((sel + 1) % count))
-				;;
-			k)
-				sel=$(((sel + count - 1) % count))
-				;;
-			$'\r' | $'\n')
-				chosen=${names[$sel]}
-				break
-				;;
-			$'\e')
-				# Escape may start an arrow-key sequence: if the next
-				# two bytes arrive quickly, treat [A/[B as up/down,
-				# otherwise treat the Escape itself as "quit".
-				rest=''
-				if IFS= read -rsn2 -t 0.05 -u 3 rest && [ "$rest" = '[A' ]; then
-					sel=$(((sel + count - 1) % count))
-				elif [ "$rest" = '[B' ]; then
-					sel=$(((sel + 1) % count))
-				else
+		# swallowed as an (empty) line terminator.  -t makes the wait
+		# time out after $refresh_secs so the session state can be
+		# re-fetched (below) and the menu refreshed while the user is
+		# idle.
+		if IFS= read -rsN1 -t "$refresh_secs" -u 3 key; then
+			case "$key" in
+				j)
+					[ "$count" -gt 0 ] && sel=$(((sel + 1) % count))
+					;;
+				k)
+					[ "$count" -gt 0 ] && sel=$(((sel + count - 1) % count))
+					;;
+				$'\r' | $'\n')
+					if [ "$count" -gt 0 ]; then
+						chosen=${names[$sel]}
+						break
+					fi
+					;;
+				$'\e')
+					# Escape may start an arrow-key sequence: if the next
+					# two bytes arrive quickly, treat [A/[B as up/down,
+					# otherwise treat the Escape itself as "quit".
+					rest=''
+					if IFS= read -rsn2 -t 0.05 -u 3 rest && [ "$rest" = '[A' ]; then
+						[ "$count" -gt 0 ] && sel=$(((sel + count - 1) % count))
+					elif [ "$rest" = '[B' ]; then
+						[ "$count" -gt 0 ] && sel=$(((sel + 1) % count))
+					else
+						break
+					fi
+					;;
+				q | $'\003')
 					break
-				fi
-				;;
-			q | $'\003')
-				break
-				;;
-		esac
+					;;
+			esac
+		fi
+		# A key was handled or the wait timed out ($refresh_secs
+		# elapsed): re-fetch the session state.  The redraw at the top
+		# of the loop then updates the output if (and only if) anything
+		# changed.  (The menu is of course also redrawn after a cursor
+		# move, whether or not the state changed.)
+		out=$(list_fetch)
+		if [ "$out" != "$rendered" ]; then
+			rendered=$out
+			list_split <<<"$out"
+			count=${#names[@]}
+			if [ "$sel" -ge "$count" ]; then
+				sel=0
+			fi
+		fi
 	done
 	exec 3>&-
 	stty "$old_stty" </dev/tty
