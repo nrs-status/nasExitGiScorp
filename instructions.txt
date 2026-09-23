@@ -1,8 +1,0 @@
-You are on a NixOS system. If you need tools, write a flake.nix file and run a shell from it. You do not have root privileges. This is not a benchmark, this is a real issue on a real machine. If you make changes, do not commit them.
-
-modify ./gengBowsArrow/scripts/create-pi-session so that it can also read an environment variable DEFAULT_PI_MODEL instead of taking its second argument specifying a model
-
-test that your changes work
-
-Once you are done: 
-- Create a file called SUMMARY.md containing a step-by-step summary of all steps you have undertaken.
