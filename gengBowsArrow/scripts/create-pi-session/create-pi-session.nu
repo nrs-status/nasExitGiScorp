@@ -6,6 +6,10 @@
 # moves instructions.txt into it, and opens a tmux session (via `sesh
 # connect`) containing two windows:
 #
+# As soon as the new tmux session is created, the session is marked as
+# having a task underway via `taskmux start` (description: the new branch's
+# name).
+#
 # instructions.txt is written in the *current directory* (not in the worktree)
 # so that editor completion offers paths relative to the directory the script
 # was called from.
@@ -105,6 +109,14 @@ def main [branch: string, model?: string] {
         ^tmux new-session -d -s $session -c $wt_path -n pi $pi_cmd
         # Window 2: a plain shell at the worktree
         ^tmux new-window -d -t $session -n shell -c $wt_path
+        # Mark the freshly created session as having a task underway,
+        # with the new branch's name as the task description.
+        let tm = (do { ^taskmux start $branch $session } | complete)
+        if $tm.exit_code != 0 {
+            print $"(ansi red)Error:(ansi reset) 'taskmux start ($branch) ($session)' failed:"
+            print $tm.stderr
+            exit 1
+        }
     }
 
     # --- 7. Connect to the session with sesh -----------------------------------
