@@ -25,7 +25,7 @@ def main [branch: string, model: string] {
 
     # --- 3. Create the worktree -----------------------------------------------
     print $"Creating worktree for branch (ansi cyan)($branch)(ansi reset) based on (ansi cyan)($current)(ansi reset)..."
-    let wt = (do { wt switch --create $branch --base $current } | complete)
+    let wt = (do { ^wt switch --create $branch --base $current } | complete)
     if $wt.exit_code != 0 {
         print $"(ansi red)Error:(ansi reset) 'wt switch --create ($branch) --base ($current)' failed:"
         print $wt.stderr
