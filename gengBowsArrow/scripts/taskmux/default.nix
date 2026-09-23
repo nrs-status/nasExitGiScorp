@@ -15,6 +15,9 @@ pkgs.writeShellApplication {
   runtimeInputs = [
     pkgs.tmux
     pkgs.gawk
+    # coreutils (stty): needed by `taskmux list' to put the terminal in
+    # raw mode for the interactive j/k selection.
+    pkgs.coreutils
   ];
   text = builtins.readFile ./taskmux.sh;
 }
