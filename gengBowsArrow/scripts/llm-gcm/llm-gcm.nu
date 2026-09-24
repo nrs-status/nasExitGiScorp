@@ -8,6 +8,7 @@ const MAX_DIFF_CHARS = 60000
 
 def main [
   --dry-run # Print the generated message and exit (no neovim, no commit)
+  --model: string # Optional model pattern or ID passed through to `pi` (e.g. "anthropic/claude-sonnet-4-5")
 ] {
   # Sanity checks
   let repo = (git rev-parse --show-toplevel | complete)
@@ -61,18 +62,51 @@ def main [
   )
 
   print "Asking pi for a suggested commit message..."
-  let llm_result = ($context | pi --no-session -nt -nc -p $instructions | complete)
+
+  # `--mode json` makes pi emit its session events (including per-message
+  # usage/cost statistics) as JSON lines on stdout, which we parse below.
+  let pi_args = (
+    [--no-session -nt -nc --mode json -p $instructions]
+    | append (if $model != null { [--model $model] } else { [] })
+  )
+  let llm_result = ($context | pi ...$pi_args | complete)
 
   if $llm_result.exit_code != 0 {
     error make {
-      msg: $"pi failed (exit ($llm_result.exit_code)): ($llm_result.stderr | str trim)"
+      msg: $"pi failed with exit code ($llm_result.exit_code): ($llm_result.stderr | str trim)"
     }
   }
 
-  # Clean up the LLM output: drop markdown code fences if any, then trim
-  let message = (
+  # Parse the JSON event stream. Keep only well-formed JSON lines.
+  let events = (
     $llm_result.stdout
     | lines
+    | each {|line| try { $line | from json } catch { null } }
+    | compact
+  )
+  # Completed assistant messages (one per turn) carry the authoritative usage
+  let assistant_messages = (
+    $events
+    | where {|e| ($e.type? == "message_end") and ($e.message?.role? == "assistant")}
+    | get message
+  )
+
+  if ($assistant_messages | is-empty) {
+    error make {msg: "pi returned no assistant message, aborting"}
+  }
+
+  # The suggested message is the text of the last assistant message
+  let message = (
+    $assistant_messages
+    | last
+    | get --optional content
+    | default []
+    | where {|c| $c.type? == "text"}
+    | get --optional text
+    | default []
+    | str join "\n"
+    # Clean up: drop markdown code fences if any, then trim
+    | split row "\n"
     | where {|line| not (($line | str trim) | str starts-with "```")}
     | str join "\n"
     | str trim
@@ -82,8 +116,28 @@ def main [
     error make {msg: "pi returned an empty message, aborting"}
   }
 
+  # Aggregate tokens and cost over all assistant messages, as recorded by pi
+  let total_tokens = (
+    $assistant_messages
+    | get --optional usage.totalTokens
+    | default []
+    | math sum
+  )
+  let total_cost = (
+    $assistant_messages
+    | get --optional usage.cost.total
+    | default []
+    | math sum
+    | math round --precision 6
+  )
+
+  let stats_line = (
+    $"llm-gcm: spent ($total_tokens) tokens, cost according to pi session: \$($total_cost)"
+  )
+
   if $dry_run {
     print $message
+    print $stats_line
     return
   }
 
@@ -148,4 +202,5 @@ def main [
 
   git commit --cleanup=strip -F $msg_file
   rm $msg_file
+  print $stats_line
 }
