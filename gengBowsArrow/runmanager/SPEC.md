@@ -31,78 +31,128 @@ These configurations can also be set individually as environment variables or co
 
 ## 3. The `run` subcommand
 
-    runmanager run <flakeref>#<runConfig>
+This section specifies the types and the runtime behavior of the `run` subcommand.
 
-The argument has the form `<flakeref>#<config>`, where the left-hand side of
-the hash sign is a flake ref of the same sort seen in the usual nix commands,
-and the right-hand side designates an output of the flake accessible at the
+### 3.0 Types
+
+This section contains various types that will be referred to throughout later sections about the `run` subcommand. The types in this section will be referred to by their section number.
+
+### 3.0.1 Subcommand syntax and validation
+
+`runmanager [global options] run [--pure] <flakeref>#<runConfig>`
+
+* The left-hand side of the hash sign is a flake ref of the same sort seen in the usual nix commands. It must be a proper flakeref.
+* The right-hand side designates an output of the flake accessible at the
 attribute `runConfigs`.
+* If the `--pure` flag is not set, the flakeref must designate a path outside the nix store, on the local machine.
+* The flake specified by the flakeref must have the `runConfigs` attribute in its outputs.
 
-### 3.0 Initial validation
+### 3.0.2 runpath
 
-The command exits with an error if the argument is not a proper flakeref, or if the `outputs.runConfigs.<runConfig>` attribute does not exist.
+A runpath consists of a string containing two substrings separated by a forward slash. The second substring must be either the word "latest" or a non negative integer.
 
-### 3.1 `runConfigs` schema
+### 3.0.3 Pure path of a run
 
-An element of the attribute `runConfigs` is an attribute set of the form:
+A pure path of a run must satisfy the following constraints:
+- It must have the form: `<flakedir>/runs/<runConfigs subattribute>/<"latest" or an integer>`.
+- `<flakedir>` must contain a `flake.nix` file
+- `<flakedir>` must refer to a flake directory *inside* the nix store
+
+
+### 3.0.4 `runConfigs` schema
+
+This is the type of `runConfigs` subattributes.
+
+A subattribute of `runConfigs` must have a value of the form:
 
     roDirs: list of paths to directories
-    follows: list of paths to directories
+    follows: list of paths of type 3.0.3
     disk:   string
     ram:    string
     model:  string
     prompt: string
 
-### 3.1.0 Validation
-
-The `roDirs` and `follows` attributes are optional, and can only contain paths in the nix store
+The `roDirs` and `follows` attributes are optional
 
 The directories whose paths are in `follows` must be empty
 
 The `disk` and `ram` strings must contain an integer followed by "MB" or "GB"
 
-The `model` string must contain three substrings separated by a forward slash, e.g. "openrouter/z-ai/glm-5.3-flash"
+The `model` string must contain three substrings separated by two forward slashes, e.g. "openrouter/z-ai/glm-5.3-flash"
+
+### 3.0.5 `workdir` path
 
 
+A `workdir` path is the path of a temporary directory, created for a single specific run, in `$TMPDIR`, using a runpath `<runConfigs subattribute>/<run number>`as a reference and timestamped with the `startTime` column value, as follows: `$TMPDIR/<runConfigs subattribute>-<run number>-<timestamp>`
 
-### 3.2 Database entry
+### 3.0.6 `run` table schema
 
-If the run `subcommand ` successfully validates the `runConfigs` attribute, it inserts an entry in the postgresql server located at the URL passed in the `runmanager` config file argument. The table has the following schema:
+The Postgresql schema for the `run` table is as follows:
 
-    'run' table
     id:                    primary key, integer
     host: <user@host>, i.e., name of the user and name of the host in which the run happens
-    origin: path in the nix store to an empty directory
-    target: null or path in the nix store to a directory 
-    workdir: path of the working directory for the run
+    runpath: string of type 3.0.2
+    type: one of: pure, impure
+    origin: nix store flakeref
+    target: null or nix store path
+    workdir: null or a path of type 3.0.5
     status:                one of: ongoing, done, initializing, terminated
     startTime:           datetime
     endTime:             null or datetime
 
-The new entry itself consists of:
+
+### 3.1 Runtime behaviour
+
+This section specifies the run-time behavior of the `run` subcommand.
+
+### 3.1.0 Initial validation
+
+The command call is first validated according to 3.0.1
+
+It then valides the `runConfigs` subattribute that was passed as an argument, according to type 3.0.4
+
+### 3.1.1. Database entry
+
+The command then validates whether there is a table called `run` in the postgreSQL server given through the URL passed in `databaseUrl`, and validates that it satisfies the schema specified as type 3.0.6.
+
+The command then inserts a new entry as follows:
 
 * `id` = a unique ID,
 * `host` = name of the user and name of the host where the command was called
-* `origin-impure` = see section 3.2.0
-* `origin` = see section 3.2.0
-* `target` = empty for the moment
-* `workdir` = a new temporary directory created for this specific run
-* `status` = `initializing`, 
+* `runpath` = see section 3.1.1.0
+* `type` = "impure" unless `--pure` flag is passed, in which case "pure"
+* `origin` = see section 3.1.1.1
+* `output` = empty for the moment
 * `startTime` = the time right now,
+* `workdir` = A temporary directory whose path atisfies type 3.0.5, using the values of `runpath` and `startTime`
+* `status` = `initializing` 
 * `endTime` is empty for the moment.
 
-### 3.2.0 The `origin-impure` and `origin` values
+### 3.1.1.0 The `runpath` value
 
-The value of the `origin-impure` column is determined in the following way:
-* if the `<flakedir>/runs/<runConfigs subattribute for current run>` directory does not exist, it is created.
-* if the directory `<flakedir>/runs/<runConfigs subattribute for current run>/0` does not exist, it is created. otherwise, the directory `<flakedir>/runs/<runConfigs subattribute for current run>/<increment highest number at this path by 1>` is created
-* `origin-impure` is set to the path of this last created directory
+### 3.1.1.0.0  `type` = "impure"
 
-At this point, an unrelated side-effect is triggered: a symlink is created or updated at `<flakedir>/runs/runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory
+if `type` = "impure", then
 
-The value of the `origin` column is determined in the following way
-* the flake's path in the nix store is changed to a new path in the nix store with a flake containing the new directory and the updated symlink
-* the `origin` value is set to what `origin-impure` is under the new flake in the nix store created at the previous step. That means it necessarily is a path to an empty directory.
+If `flakeref`, which is a local path due to `type` = "impure", does not contain `runs/<runConfigs subattribute for current run>/0`, it is created, and runpath is `<runConfigs subattribute for current run>/0`. If that directory does exists, we create instead `runs/<runConfigs subattribute for current run>/<increment highest number at this path by 1>`, and runpath is `<runConfigs subattribute for current run>/<increment highest number at this path by 1>`
+
+At this point, an unrelated side-effect is triggered: a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory
+
+### 3.1.1.0.1 `type` = "pure"
+
+
+if `type` = "pure", then
+
+The `run` table is searched for any run whose runpath begins with the same `runConfigs` subattribute as the current run. Runs with status `terminated` are ignored.
+
+If no such entry exists, runpath is `<runConfigs subattribute for current run>/0`. Otherwise, it is `<runConfigs subattribute for current run>/<increment highest number at this path in search results by 1>`
+
+
+### 3.1.1.1 The `origin` value
+
+if `type` = "impure", then `origin` is the path of a nix store copy of `flakeref` that includes the new directories
+if `type` = "pure", then `origin` is `flakeref`
+
 
 ### 3.3 Running the job
 
@@ -117,7 +167,7 @@ Once the database entry is made, `run` executes the `run-pi-microvm` script usin
   the path is handed to the script),
 * the prompt from `prompt` is passed on stdin.
 
-The `run-pi-microvm` script is resolved from the `runmanager` config file.
+The `run-pi-microvm` script is resolved from the `runPiMicroVMPath` config value
 
 ### 3.4 Monitoring
 
@@ -128,12 +178,13 @@ While the script is running, `runmanager run` monitors the run's state and updat
 
 ### 3.4.1 Hook on the `runs` directory when setting the status to `terminated`
 
-If a run's status is set to `terminated`, then the corresponding directory in `runs` is moved to `$TMPDIR`, timestamped with the `endTime` column value, as follows: `<flakedir>/runs/<run config name>/<run number>` gets moved to `/tmp/<run config name>-<run number>-<timestamp>`
+If a run's status is set to `terminated` and `type` = "impure", then the corresponding directory in `runs` is deleted.
 
 ### 3.4.2 Hook on the `runs` directory when setting the status to `done`
 
-If a run completes successfully then the contents of the `workdir` temporary directory created specifically for this run is moved to the path stated at `origin-impure`. Then, the path of the flake is modified to a new path in the nix store, this time contining a flake with the updated contents of `origin-impure`. The path of `origin-impure` in this new nix store flake path is the value to which `target` is set in the `run` table.
+If a run completes successfully, the contents of the `workdir` temporary directory created specifically for this run is moved to the nix store, the value of `outputPath` in the database is updated with its nix store path and also printed to stdout
 
+furthermore, if `type` = "impure", then the contents of `workdir` is also copied to `<impure flakeref>/runs/<runpath>`
 
 ## 4. The `list` subcommand
 
@@ -147,8 +198,6 @@ This command lists the entries of the postgresql's URL's  `run` table according 
      it     # only initializing and terminated
 
 The output is a nushell-friendly table: whitespace-aligned columns whose
-first line holds single-word headers (ID, STATUS, START, END, CONFIG,
-OUTPUT, WORKDIR), with space-free ISO-8601 timestamps and no decoration
-rows, so that piping it into nushell's `detect columns` yields a proper
+first line holds single-word headers (same as the columns in type 3.0.6), with space-free ISO-8601 timestamps and no decoration rows, so that piping it into nushell's `detect columns` yields a proper
 structured table (e.g. `runmanager list -c <config> | detect columns | where
 STATUS == done`).
