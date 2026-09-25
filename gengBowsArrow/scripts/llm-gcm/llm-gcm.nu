@@ -8,13 +8,13 @@ const MAX_DIFF_CHARS = 60000
 
 def main [
   --dry-run # Print the generated message and exit (no neovim, no commit)
-  --model: string # Optional model pattern or ID passed through to `pi` (e.g. "anthropic/claude-sonnet-4-5"); takes precedence over the LLMGCM_DEFAULT_MODEL environment variable
+  --model: string # Optional model pattern or ID passed through to `pi` (e.g. "anthropic/claude-sonnet-4-5"); takes precedence over the DEFAULT_LLMGCM_MODEL environment variable
 ] {
   # Resolve which model to use: the --model flag wins over the
-  # LLMGCM_DEFAULT_MODEL environment variable; if neither is set, pi's own
+  # DEFAULT_LLMGCM_MODEL environment variable; if neither is set, pi's own
   # default model is used.
   let chosen_model = (
-    if $model != null { $model } else { $env.LLMGCM_DEFAULT_MODEL? | default null }
+    if $model != null { $model } else { $env.DEFAULT_LLMGCM_MODEL? | default null }
   )
   # Sanity checks
   let repo = (git rev-parse --show-toplevel | complete)
