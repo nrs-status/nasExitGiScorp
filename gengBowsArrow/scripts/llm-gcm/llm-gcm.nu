@@ -8,8 +8,14 @@ const MAX_DIFF_CHARS = 60000
 
 def main [
   --dry-run # Print the generated message and exit (no neovim, no commit)
-  --model: string # Optional model pattern or ID passed through to `pi` (e.g. "anthropic/claude-sonnet-4-5")
+  --model: string # Optional model pattern or ID passed through to `pi` (e.g. "anthropic/claude-sonnet-4-5"); takes precedence over the LLMGCM_DEFAULT_MODEL environment variable
 ] {
+  # Resolve which model to use: the --model flag wins over the
+  # LLMGCM_DEFAULT_MODEL environment variable; if neither is set, pi's own
+  # default model is used.
+  let chosen_model = (
+    if $model != null { $model } else { $env.LLMGCM_DEFAULT_MODEL? | default null }
+  )
   # Sanity checks
   let repo = (git rev-parse --show-toplevel | complete)
   if $repo.exit_code != 0 {
@@ -67,7 +73,7 @@ def main [
   # usage/cost statistics) as JSON lines on stdout, which we parse below.
   let pi_args = (
     [--no-session -nt -nc --mode json -p $instructions]
-    | append (if $model != null { [--model $model] } else { [] })
+    | append (if $chosen_model != null { [--model $chosen_model] } else { [] })
   )
   let llm_result = ($context | pi ...$pi_args | complete)
 
