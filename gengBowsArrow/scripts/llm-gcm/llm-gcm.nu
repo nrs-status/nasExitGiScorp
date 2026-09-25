@@ -69,6 +69,17 @@ def main [
 
   print "Asking pi for a suggested commit message..."
 
+  # Create a timestamped session directory in $TMPDIR that holds all of the
+  # session information for the call to pi below: the raw JSON event stream,
+  # the prompt context, pi's stderr and run metadata.
+  let timestamp = (date now | format date "%Y%m%d-%H%M%S%9f")
+  let session_dir = (($env.TMPDIR? | default $nu.temp-dir) | path join $"llm-gcm-($timestamp)")
+  mkdir $session_dir
+  print $"llm-gcm: saving pi session to ($session_dir)"
+
+  # Persist the prompt context (what pi was asked, including the diff)
+  $context | save -f ($session_dir | path join "prompt.txt")
+
   # `--mode json` makes pi emit its session events (including per-message
   # usage/cost statistics) as JSON lines on stdout, which we parse below.
   let pi_args = (
@@ -76,6 +87,22 @@ def main [
     | append (if $chosen_model != null { [--model $chosen_model] } else { [] })
   )
   let llm_result = ($context | pi ...$pi_args | complete)
+
+  # Save the raw session data (the JSON event stream and stderr) even when
+  # the call failed, so failures can be debugged afterwards.
+  $llm_result.stdout | save -f ($session_dir | path join "session.jsonl")
+  $llm_result.stderr | save -f ($session_dir | path join "stderr.log")
+  {
+    timestamp: $timestamp
+    session_dir: $session_dir
+    repository: ($repo.stdout | str trim)
+    branch: $branch
+    model: $chosen_model
+    pi_args: $pi_args
+    exit_code: $llm_result.exit_code
+    diff_stat: $diff_stat
+    recent_commits: $recent_commits
+  } | to json | save -f ($session_dir | path join "metadata.json")
 
   if $llm_result.exit_code != 0 {
     error make {
@@ -122,6 +149,9 @@ def main [
     error make {msg: "pi returned an empty message, aborting"}
   }
 
+  # Record the suggested commit message as part of the session information
+  $message | save -f ($session_dir | path join "suggested-message.md")
+
   # Aggregate tokens and cost over all assistant messages, as recorded by pi
   let total_tokens = (
     $assistant_messages
@@ -140,6 +170,7 @@ def main [
   let stats_line = (
     $"llm-gcm: spent ($total_tokens) tokens, cost according to pi session: \$($total_cost)"
   )
+  let stats_line = ($stats_line + $" | session saved in ($session_dir)")
 
   if $dry_run {
     print $message
