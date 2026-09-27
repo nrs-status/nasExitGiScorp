@@ -67,7 +67,17 @@ When `mode === "pin"`, the `before_provider_request` hook rewrites the payload:
 ```
 
 Any pre-existing `order` is removed so `only` takes effect. When
-`mode === "auto"` the payload is left untouched.
+`mode === "auto"` the payload is left untouched — unless providers have been
+blacklisted (see below), in which case the payload is rewritten to:
+
+```jsonc
+{
+  "provider": {
+    "ignore": ["<blacklisted-slug>", ...],
+    "allow_fallbacks": true
+  }
+}
+```
 
 ## 5. Commands
 
@@ -80,6 +90,9 @@ Any pre-existing `order` is removed so `only` takes effect. When
 | `/openrouter pin <slug>` | Force `<slug>`, disallow fallbacks. |
 | `/openrouter prefer <slug>` | Try `<slug>` first, allow fallbacks. |
 | `/openrouter <slug>` | Shorthand for `pin <slug>`. |
+| `/openrouter block <slug>` | Blacklist `<slug>` from automatic selection. |
+| `/openrouter unblock <slug>` | Remove `<slug>` from the blacklist. |
+| `/openrouter blocked` | Show the blacklist. |
 
 The interactive picker lists providers from
 `GET {baseUrl}/models/<modelId>/endpoints`, deduplicated per provider slug
@@ -87,6 +100,16 @@ The interactive picker lists providers from
 price. Each entry shows the model's precision (quantization, e.g. `[fp8]`) at
 that endpoint when OpenRouter reports a known one, price per million tokens,
 and 30-minute uptime. `/openrouter list` shows the same information.
+
+In TUI mode the picker is a toggle-aware menu: pressing **shift+enter** on a
+menu item toggles (blacklists) that provider instead of closing the menu with
+a selection. Blacklisted providers are marked with `✗`, persisted in the
+session as a custom entry of type `openrouter-blacklist`, and excluded from
+OpenRouter's automated selection mode (see above); pressing shift+enter on an
+already-blacklisted item un-blacklists it. Plain enter still pins the
+selected item. In non-TUI modes the picker falls back to a plain select menu
+(blacklisted items are marked with `✗` but cannot be toggled interactively —
+use `block`/`unblock` instead).
 
 ## 6. Non-goals
 

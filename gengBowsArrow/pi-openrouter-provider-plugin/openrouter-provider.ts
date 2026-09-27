@@ -21,6 +21,11 @@
  *      the session so it survives resumption. The picker and `list` also
  *      show the model's precision (quantization) at each endpoint when
  *      OpenRouter reports it.
+ *   4. Lets the user blacklist upstream providers from the automated
+ *      selection mode: in the `/openrouter` picker, pressing shift+enter on
+ *      a menu item toggles (blacklists) it instead of pinning it. A
+ *      blacklisted provider is excluded from OpenRouter's automatic
+ *      provider choice via the `provider.ignore` routing field.
  *
  * Usage:
  *   pi -e ./openrouter-provider.ts
@@ -33,6 +38,9 @@
  *   /openrouter pin <slug>           force <slug>, disallow fallbacks
  *   /openrouter prefer <slug>        try <slug> first, allow fallbacks
  *   /openrouter <slug>               shorthand for `pin <slug>`
+ *   /openrouter block <slug>         blacklist <slug> from automatic selection
+ *   /openrouter unblock <slug>       remove <slug> from the blacklist
+ *   /openrouter blocked              show the blacklist
  *
  * Debugging: set PI_OPENROUTER_PROVIDER_LOG=/path/to/log to append a trace.
  */
@@ -40,9 +48,11 @@
 import { appendFileSync } from "node:fs";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
+import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 
 const STATUS_KEY = "openrouter-provider";
 const ROUTING_ENTRY = "openrouter-routing";
+const BLACKLIST_ENTRY = "openrouter-blacklist";
 const DEBUG_LOG = process.env.PI_OPENROUTER_PROVIDER_LOG;
 
 type RoutingMode = "auto" | "pin";
@@ -75,6 +85,8 @@ interface EndpointInfo {
 }
 
 let routing: Routing = { mode: "auto" };
+/** Provider slugs excluded from OpenRouter's automatic selection. */
+let blacklist: string[] = [];
 let lastDetected: string | undefined;
 let statusDirty = false;
 let cachedKey: string | undefined;
@@ -138,6 +150,7 @@ function renderStatus(ctx: ExtensionContext): void {
 	const parts: string[] = [];
 	if (lastDetected) parts.push(lastDetected);
 	if (routing.mode === "pin" && routing.provider) parts.push(`pin:${routing.provider}`);
+	if (blacklist.length > 0) parts.push(`blacklisted:${blacklist.length}`);
 	const text = parts.length > 0 ? `⇢ ${parts.join(" · ")}` : undefined;
 	safeUi(ctx, (ui) => ui.setStatus(STATUS_KEY, text));
 }
@@ -149,6 +162,16 @@ function sanitizeRouting(data: unknown): Routing {
 		return { mode: "pin", provider: raw.provider.trim(), allowFallbacks: raw.allowFallbacks === true };
 	}
 	return { mode: "auto" };
+}
+
+function sanitizeBlacklist(data: unknown): string[] {
+	if (!data || typeof data !== "object") return [];
+	const raw = (data as { providers?: unknown }).providers;
+	if (!Array.isArray(raw)) return [];
+	const slugs = raw
+		.filter((item): item is string => typeof item === "string" && !!item.trim())
+		.map((item) => item.trim().toLowerCase());
+	return [...new Set(slugs)];
 }
 
 async function ensureKey(ctx: ExtensionContext): Promise<string | undefined> {
@@ -380,6 +403,25 @@ function priceTag(endpoint: EndpointInfo): string {
 	return ` — $${fmtPrice(endpoint.promptPrice)}/M in, $${fmtPrice(endpoint.completionPrice)}/M out${uptime}`;
 }
 
+function setBlacklist(next: string[], ctx: ExtensionContext, changed?: string, added?: boolean): void {
+	blacklist = next;
+	try {
+		api?.appendEntry(BLACKLIST_ENTRY, { providers: blacklist });
+	} catch (error) {
+		log(`could not persist blacklist: ${String(error)}`);
+	}
+	renderStatus(ctx);
+	if (changed) {
+		ctx.ui.notify(
+			added
+				? `OpenRouter: blacklisted "${changed}" (excluded from automatic selection)`
+				: `OpenRouter: un-blacklisted "${changed}" (automatic selection may use it again)`,
+			"info",
+		);
+	}
+	log(`blacklist set: ${JSON.stringify(blacklist)}`);
+}
+
 function setRouting(next: Routing, ctx: ExtensionContext): void {
 	routing = next;
 	try {
@@ -398,6 +440,70 @@ function setRouting(next: Routing, ctx: ExtensionContext): void {
 	log(`routing set: ${JSON.stringify(routing)}`);
 }
 
+/**
+ * The interactive picker action: either pin an item (plain enter), or toggle
+ * its blacklist state (shift+enter), or cancel (escape).
+ */
+type PickerAction = { kind: "pin"; slug?: string } | { kind: "toggle"; slug: string } | { kind: "cancel" };
+
+/**
+ * Interactive picker with toggle support (TUI mode only). Plain enter pins
+ * the highlighted provider (or selects Auto); shift+enter toggles the
+ * highlighted provider's blacklist state instead of selecting it.
+ */
+async function pickWithToggle(ctx: ExtensionCommandContext, endpoints: EndpointInfo[]): Promise<PickerAction> {
+	return ctx.ui.custom<PickerAction>((tui, theme, _kb, done) => {
+		const rows: { slug?: string; base: string }[] = [
+			{ slug: undefined, base: "Auto — let OpenRouter decide" },
+			...endpoints.map((endpoint) => ({
+				slug: endpoint.slug,
+				base: `${endpoint.name} (${endpoint.slug})${precisionTag(endpoint)}${priceTag(endpoint)}`,
+			})),
+		];
+		const blocked = new Set(blacklist);
+		let index = 0;
+		return {
+			render(width: number): string[] {
+				const lines: string[] = [];
+				lines.push(theme.fg("accent", theme.bold("OpenRouter upstream provider")));
+				lines.push(theme.fg("dim", "enter pin · shift+enter blacklist-toggle · esc cancel"));
+				rows.forEach((row, i) => {
+					const cursor = i === index ? "→ " : "  ";
+					const marker = row.slug && blocked.has(row.slug) ? "✗ " : "  ";
+					let text = truncateToWidth(`${cursor}${marker}${row.base}`, width, "");
+					if (row.slug && blocked.has(row.slug)) text = theme.fg("error", text);
+					else if (i === index) text = theme.fg("accent", text);
+					lines.push(text);
+				});
+				return lines;
+			},
+			invalidate(): void {},
+			handleInput(data: string): void {
+				if (matchesKey(data, "up")) {
+					index = index === 0 ? rows.length - 1 : index - 1;
+				} else if (matchesKey(data, "down")) {
+					index = index === rows.length - 1 ? 0 : index + 1;
+				} else if (matchesKey(data, "shift+enter")) {
+					const row = rows[index];
+					if (row?.slug) {
+						if (blocked.has(row.slug)) blocked.delete(row.slug);
+						else blocked.add(row.slug);
+						done({ kind: "toggle", slug: row.slug });
+						return;
+					}
+				} else if (matchesKey(data, "enter")) {
+					done({ kind: "pin", slug: rows[index]?.slug });
+					return;
+				} else if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+					done({ kind: "cancel" });
+					return;
+				}
+				tui.requestRender();
+			},
+		};
+	});
+}
+
 async function pickProvider(ctx: ExtensionCommandContext): Promise<void> {
 	const model = ctx.model;
 	safeUi(ctx, (ui) => ui.setStatus(STATUS_KEY, "⇢ loading providers…"));
@@ -410,10 +516,36 @@ async function pickProvider(ctx: ExtensionCommandContext): Promise<void> {
 		return;
 	}
 	renderStatus(ctx);
+	if (ctx.mode === "tui") {
+		// Full picker with shift+enter blacklist toggling.
+		const action = await pickWithToggle(ctx, endpoints);
+		if (!action || action.kind === "cancel") return;
+		if (action.kind === "pin") {
+			if (action.slug) setRouting({ mode: "pin", provider: action.slug, allowFallbacks: false }, ctx);
+			else setRouting({ mode: "auto" }, ctx);
+			return;
+		}
+		// Toggle the highlighted provider's blacklist state.
+		const slug = action.slug;
+		if (blacklist.includes(slug)) {
+			setBlacklist(
+				blacklist.filter((s) => s !== slug),
+				ctx,
+				slug,
+				false,
+			);
+		} else {
+			setBlacklist([...blacklist, slug], ctx, slug, true);
+		}
+		return;
+	}
+	// Fallback (RPC / non-TUI): plain select menu, no toggling.
 	const labels: string[] = ["Auto — let OpenRouter decide"];
 	const slugs: (string | undefined)[] = [undefined];
 	endpoints.forEach((endpoint, index) => {
-		labels.push(`${index + 1}. ${endpoint.name} (${endpoint.slug})${precisionTag(endpoint)}${priceTag(endpoint)}`);
+		labels.push(
+			`${index + 1}. ${blacklist.includes(endpoint.slug) ? "✗ " : ""}${endpoint.name} (${endpoint.slug})${precisionTag(endpoint)}${priceTag(endpoint)}`,
+		);
 		slugs.push(endpoint.slug);
 	});
 	const choice = await ctx.ui.select("OpenRouter upstream provider", labels);
@@ -445,7 +577,7 @@ function describeRouting(): string {
 	if (routing.mode === "pin" && routing.provider) {
 		return `pinned to "${routing.provider}"${routing.allowFallbacks ? " (fallbacks allowed)" : " (no fallbacks)"}`;
 	}
-	return "automatic (OpenRouter decides)";
+	return `automatic (OpenRouter decides)${blacklist.length > 0 ? `, blacklisted: ${blacklist.join(", ")}` : ""}`;
 }
 
 async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -475,6 +607,41 @@ async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Pro
 		case "list":
 			await listProviders(ctx);
 			return;
+		case "block":
+		case "blacklist": {
+			const slugs = rest.map((s) => s.toLowerCase()).filter(Boolean);
+			if (slugs.length === 0) {
+				ctx.ui.notify("Usage: /openrouter block <provider-slug>…", "warning");
+				return;
+			}
+			const next = [...new Set([...blacklist, ...slugs])];
+			setBlacklist(next, ctx, slugs[0], true);
+			return;
+		}
+		case "unblock":
+		case "unblacklist": {
+			const slugs = rest.map((s) => s.toLowerCase()).filter(Boolean);
+			if (slugs.length === 0) {
+				ctx.ui.notify("Usage: /openrouter unblock <provider-slug>…", "warning");
+				return;
+			}
+			const next = blacklist.filter((s) => !slugs.includes(s));
+			if (next.length === blacklist.length) {
+				ctx.ui.notify(`OpenRouter: "${slugs[0]}" is not blacklisted`, "warning");
+				return;
+			}
+			setBlacklist(next, ctx, slugs[0], false);
+			return;
+		}
+		case "blocked":
+		case "blacklisted":
+			ctx.ui.notify(
+				blacklist.length > 0
+					? `Blacklisted providers (excluded from automatic selection):\n${blacklist.join("\n")}`
+					: "No blacklisted providers.",
+				"info",
+			);
+			return;
 		case "pin":
 			if (!rest[0]) {
 				ctx.ui.notify("Usage: /openrouter pin <provider-slug>", "warning");
@@ -498,7 +665,14 @@ async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Pro
 export default function (pi: ExtensionAPI): void {
 	api = pi;
 	pi.on("session_start", async (_event, ctx) => {
-		const entries = ctx.sessionManager.getEntries();
+	const entries = ctx.sessionManager.getEntries();
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i] as { type?: string; customType?: string; data?: unknown };
+			if (entry.type === "custom" && entry.customType === BLACKLIST_ENTRY) {
+				blacklist = sanitizeBlacklist(entry.data);
+				break;
+			}
+		}
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i] as { type?: string; customType?: string; data?: unknown };
 			if (entry.type === "custom" && entry.customType === ROUTING_ENTRY) {
@@ -511,7 +685,7 @@ export default function (pi: ExtensionAPI): void {
 			installStreamTap(pi, ctx);
 		}
 		renderStatus(ctx);
-		log(`session start: model=${ctx.model?.id} routing=${JSON.stringify(routing)}`);
+		log(`session start: model=${ctx.model?.id} routing=${JSON.stringify(routing)} blacklist=${JSON.stringify(blacklist)}`);
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
@@ -540,21 +714,33 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", (event, ctx) => {
 		if (!isOpenRouterModel(ctx.model)) return;
-		log(`request: model=${ctx.model?.id} routing=${JSON.stringify(routing)}`);
-		if (routing.mode !== "pin" || !routing.provider) return;
+		log(`request: model=${ctx.model?.id} routing=${JSON.stringify(routing)} blacklist=${JSON.stringify(blacklist)}`);
 		const payload =
 			event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
 		const existing =
 			payload.provider && typeof payload.provider === "object"
 				? (payload.provider as Record<string, unknown>)
 				: {};
+		if (routing.mode === "pin" && routing.provider) {
+			const provider: Record<string, unknown> = {
+				...existing,
+				only: [routing.provider],
+				allow_fallbacks: routing.allowFallbacks ?? false,
+			};
+			delete provider.order;
+			log(`injecting provider routing: ${JSON.stringify(provider)}`);
+			return { ...payload, provider };
+		}
+		// Automated (auto) selection mode: keep the blacklisted providers away
+		// from OpenRouter's choice via `provider.ignore`.
+		if (blacklist.length === 0) return;
 		const provider: Record<string, unknown> = {
 			...existing,
-			only: [routing.provider],
-			allow_fallbacks: routing.allowFallbacks ?? false,
+			ignore: [...blacklist],
+			allow_fallbacks: true,
 		};
 		delete provider.order;
-		log(`injecting provider routing: ${JSON.stringify(provider)}`);
+		log(`injecting provider blacklist: ${JSON.stringify(provider)}`);
 		return { ...payload, provider };
 	});
 
@@ -587,7 +773,8 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	const command = {
-		description: "Show or change which upstream provider OpenRouter routes to",
+		description:
+			"Show or change which upstream provider OpenRouter routes to (shift+enter in the picker toggles/blacklists a provider)",
 		handler: handleOpenRouter,
 	};
 	pi.registerCommand("openrouter", command);

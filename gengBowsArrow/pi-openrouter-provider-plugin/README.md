@@ -35,12 +35,21 @@ for all projects, `.pi/extensions/` for this one).
 | `/openrouter prefer <slug>` | Try `<slug>` first, allow fallbacks. |
 | `/openrouter <slug>` | Shorthand for `pin <slug>`. |
 
-The status area shows `⇢ <Provider>` (and ` · pin:<slug>` when pinned) while an
-OpenRouter model is active.
+The status area shows `⇢ <Provider>` (and ` · pin:<slug>` when pinned, plus
+` · blacklisted:<n>` when providers are blacklisted) while an OpenRouter model
+is active.
 
 The interactive picker (and `/openrouter list`) shows, per provider: the
 model's precision (quantization, e.g. `[fp8]`) at that endpoint when known,
 the price per million tokens, and 30-minute uptime.
+
+In the interactive picker, **shift+enter toggles (blacklists) the highlighted
+provider** instead of selecting it: a blacklisted provider is marked with `✗`
+and is excluded from OpenRouter's automatic provider selection (injected as
+`provider.ignore` on outgoing requests). Pressing shift+enter again on a
+blacklisted item un-blacklists it. Plain enter still pins the selected
+provider. The same blacklist can be managed textually via `/openrouter
+block|unblock|blocked`.
 
 ## Options
 

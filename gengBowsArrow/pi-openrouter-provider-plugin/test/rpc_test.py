@@ -8,7 +8,11 @@ Drives pi in RPC mode (`pi --mode rpc -e <extension>`) and checks:
   2. routing pin: `/openrouter pin <slug>` injects `provider.only` into the
      next request payload (and the upstream generation confirms it);
   3. interactive picker: `/openrouter` opens a select dialog whose options
-     come from the model's endpoints, and choosing one pins it.
+     come from the model's endpoints, and choosing one pins it;
+  4. blacklist toggle: blacklisted providers are excluded from automatic
+     selection via `provider.ignore` (exercised through the `block`/
+     `unblock` subcommands, which the picker's shift+enter toggle funnels
+     into), and are marked with `✗` in the picker.
 """
 
 from __future__ import annotations
@@ -217,6 +221,10 @@ def pin_and_prompt(candidate: dict, log_path: str) -> tuple[bool, str]:
         rpc.close()
 
 
+def flattened_log(text: str) -> str:
+    return text.replace(" ", "")
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -313,6 +321,61 @@ def main() -> int:
             check(True, f"picker selection applied: {notify.get('message')!r}")
     finally:
         rpc2.close()
+
+    # ---- Test 4: blacklist toggle (shift+enter) behaviour ----------------
+    # The shift+enter toggle lives in the TUI picker; through RPC we exercise
+    # the same blacklist machinery via the `block`/`unblock` subcommands
+    # (which the picker's toggle path funnels into) and verify that automatic
+    # selection mode excludes blacklisted providers via `provider.ignore`.
+    if candidates:
+        blocked_slug = candidates[1]["slug"] if len(candidates) > 1 else candidates[0]["slug"]
+        log_path3 = "/tmp/pi-openrouter-provider-blacklist.log"
+        try:
+            os.unlink(log_path3)
+        except FileNotFoundError:
+            pass
+        rpc3 = PiRpc(log_path3)
+        try:
+            rpc3.send({"type": "prompt", "message": f"/openrouter block {blocked_slug}"})
+            rpc3.wait_for(
+                lambda e: e.get("method") == "notify" and "blacklisted" in (e.get("message") or ""),
+                30,
+                "block notification",
+            )
+            rpc3.send({"type": "prompt", "message": "Reply with exactly: ok"})
+            wait_for_agent_end(rpc3, 150)
+            flat = read_log(log_path3).replace(" ", "")
+            check(
+                f'"ignore":["{blocked_slug}"]' in flat,
+                f"auto-mode request excludes blacklisted provider {blocked_slug!r}",
+            )
+            check(
+                '"allow_fallbacks":true' in flat,
+                "auto-mode request keeps fallbacks allowed while blacklisting",
+            )
+            # The picker (RPC fallback select) must mark the blacklisted item.
+            rpc3.send({"type": "prompt", "message": "/openrouter"})
+            select = rpc3.wait_for(
+                lambda e: e.get("method") == "select" and e.get("title") == "OpenRouter upstream provider",
+                60,
+                "picker after block",
+            )
+            marked = next((o for o in select.get("options", []) if f"({blocked_slug})" in o and "✗" in o), None)
+            check(marked is not None, f"picker marks blacklisted provider with ✗: {select.get('options')}")
+            rpc3.send({"type": "extension_ui_response", "id": select["id"], "cancelled": True})
+            # Un-blacklist again; the next auto request must not ignore anyone.
+            rpc3.send({"type": "prompt", "message": f"/openrouter unblock {blocked_slug}"})
+            rpc3.wait_for(
+                lambda e: e.get("method") == "notify" and "un-blacklisted" in (e.get("message") or ""),
+                30,
+                "unblock notification",
+            )
+            rpc3.send({"type": "prompt", "message": "Reply with exactly: ok"})
+            wait_for_agent_end(rpc3, 150)
+            flat2 = read_log(log_path3).replace(" ", "")
+            check(flat2.count('"ignore":[') == 1, "after unblocking, requests no longer exclude the provider")
+        finally:
+            rpc3.close()
 
     print()
     if failures:
