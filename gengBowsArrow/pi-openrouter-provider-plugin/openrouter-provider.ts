@@ -18,7 +18,9 @@
  *   3. Lets the user interactively pin / prefer an upstream provider via the
  *      `/openrouter` command. The selection is injected into the outgoing
  *      request as the OpenRouter `provider` routing field, and persisted in
- *      the session so it survives resumption.
+ *      the session so it survives resumption. The picker and `list` also
+ *      show the model's precision (quantization) at each endpoint when
+ *      OpenRouter reports it.
  *
  * Usage:
  *   pi -e ./openrouter-provider.ts
@@ -362,6 +364,16 @@ function fmtPrice(value: number | undefined): string {
 	return perMillion.toFixed(2);
 }
 
+/**
+ * The precision (quantization) the model is served with at this endpoint,
+ * rendered as a label suffix. Empty when OpenRouter does not report a known
+ * quantization for the endpoint.
+ */
+function precisionTag(endpoint: EndpointInfo): string {
+	if (!endpoint.quantization || endpoint.quantization === "unknown") return "";
+	return ` [${endpoint.quantization}]`;
+}
+
 function priceTag(endpoint: EndpointInfo): string {
 	if (endpoint.promptPrice === undefined && endpoint.completionPrice === undefined) return "";
 	const uptime = endpoint.uptime !== undefined ? `, up ${endpoint.uptime.toFixed(1)}%` : "";
@@ -401,7 +413,7 @@ async function pickProvider(ctx: ExtensionCommandContext): Promise<void> {
 	const labels: string[] = ["Auto — let OpenRouter decide"];
 	const slugs: (string | undefined)[] = [undefined];
 	endpoints.forEach((endpoint, index) => {
-		labels.push(`${index + 1}. ${endpoint.name} (${endpoint.slug})${priceTag(endpoint)}`);
+		labels.push(`${index + 1}. ${endpoint.name} (${endpoint.slug})${precisionTag(endpoint)}${priceTag(endpoint)}`);
 		slugs.push(endpoint.slug);
 	});
 	const choice = await ctx.ui.select("OpenRouter upstream provider", labels);
@@ -425,7 +437,7 @@ async function listProviders(ctx: ExtensionCommandContext): Promise<void> {
 	}
 	const lines = endpoints
 		.slice(0, 15)
-		.map((endpoint, index) => `${index + 1}. ${endpoint.name} (${endpoint.slug})${priceTag(endpoint)}`);
+		.map((endpoint, index) => `${index + 1}. ${endpoint.name} (${endpoint.slug})${precisionTag(endpoint)}${priceTag(endpoint)}`);
 	ctx.ui.notify(`Providers for ${ctx.model?.id}:\n${lines.join("\n")}`, "info");
 }
 

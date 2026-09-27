@@ -38,6 +38,10 @@ for all projects, `.pi/extensions/` for this one).
 The status area shows `⇢ <Provider>` (and ` · pin:<slug>` when pinned) while an
 OpenRouter model is active.
 
+The interactive picker (and `/openrouter list`) shows, per provider: the
+model's precision (quantization, e.g. `[fp8]`) at that endpoint when known,
+the price per million tokens, and 30-minute uptime.
+
 ## Options
 
 | Environment variable | Effect |

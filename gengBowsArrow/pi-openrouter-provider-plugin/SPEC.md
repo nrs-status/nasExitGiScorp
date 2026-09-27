@@ -84,7 +84,9 @@ Any pre-existing `order` is removed so `only` takes effect. When
 The interactive picker lists providers from
 `GET {baseUrl}/models/<modelId>/endpoints`, deduplicated per provider slug
 (the endpoint tag with any `/quantization` suffix removed), sorted by prompt
-price. Each entry shows price per million tokens and 30-minute uptime.
+price. Each entry shows the model's precision (quantization, e.g. `[fp8]`) at
+that endpoint when OpenRouter reports a known one, price per million tokens,
+and 30-minute uptime. `/openrouter list` shows the same information.
 
 ## 6. Non-goals
 

@@ -30,7 +30,7 @@ class PiRpc:
     def __init__(self, log_path: str):
         self.log_path = log_path
         self.proc = subprocess.Popen(
-            ["pi", "--mode", "rpc", "-e", EXTENSION, "--no-session"],
+            ["pi", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--no-session"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -152,10 +152,22 @@ def extract_generation_id(log_text: str) -> str | None:
 
 
 def fetch_model_endpoints(model_id: str) -> list[dict]:
-    """Providers serving `model_id`, deduped by slug, best uptime first."""
+    """Providers serving `model_id`, deduped by slug, best uptime first.
+
+    Mirrors the extension's dedup: per slug the cheapest endpoint wins
+    (ties broken on uptime), so the returned price/quantization are those of
+    the endpoint the extension would display.
+    """
     url = f"https://openrouter.ai/api/v1/models/{model_id}/endpoints"
     with urllib.request.urlopen(url, timeout=30) as response:
         data = json.load(response)
+
+    def prompt_price(endpoint: dict) -> float:
+        try:
+            return float(endpoint.get("pricing", {}).get("prompt"))
+        except (TypeError, ValueError):
+            return float("inf")
+
     best: dict[str, dict] = {}
     for endpoint in data.get("data", {}).get("endpoints", []):
         if endpoint.get("status", 0) < 0:
@@ -168,8 +180,14 @@ def fetch_model_endpoints(model_id: str) -> list[dict]:
             "slug": slug,
             "name": endpoint.get("provider_name") or slug,
             "uptime": endpoint.get("uptime_last_30m") or 0.0,
+            "prompt_price": prompt_price(endpoint),
+            "quantization": (endpoint.get("quantization") or "").strip().lower(),
         }
-        if slug not in best or entry["uptime"] > best[slug]["uptime"]:
+        previous = best.get(slug)
+        if previous is None or (entry["prompt_price"], -entry["uptime"]) < (
+            previous["prompt_price"],
+            -previous["uptime"],
+        ):
             best[slug] = entry
     return sorted(best.values(), key=lambda entry: -entry["uptime"])
 
@@ -272,6 +290,19 @@ def main() -> int:
         choice = next((o for o in options if target_slug and f"({target_slug})" in o), None)
         check(choice is not None, f"picker lists a {target_slug!r} option among {len(options)} entries")
         check(len(options) > 1, f"picker lists multiple providers ({len(options)})")
+        # Every picker option whose slug has a known quantization must show it.
+        quantized = 0
+        for candidate in candidates:
+            quant = candidate.get("quantization") or ""
+            if not quant or quant == "unknown":
+                continue
+            option = next((o for o in options if f"({candidate['slug']})" in o), None)
+            if option is None:
+                continue
+            quantized += 1
+            check(f"[{quant}]" in option, f"picker option for {candidate['slug']} shows precision {quant!r}: {option!r}")
+        if quantized == 0:
+            print("SKIP no candidate endpoint reports a known quantization")
         if choice is not None:
             rpc2.send({"type": "extension_ui_response", "id": select["id"], "value": choice})
             notify = rpc2.wait_for(
