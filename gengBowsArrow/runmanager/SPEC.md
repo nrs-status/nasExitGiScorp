@@ -30,7 +30,7 @@ TOML configuration file. The config contains:
   be non-empty (and ideally have mode 0600).
 * `runPiMicroVMPath` - path to the `run-pi-microvm` script
 * `listedStatuses` - a string of unordered characters (see section 4 for usage)
-* `streamOutputFile` - path to a file that will be used as the socket to stream `run-pi-microvm`'s JSON output. The file may or may not exist yet.
+* `streamOutputFile` - path to a file that will be used to stream `run-pi-microvm`'s JSON output. The file may or may not exist yet.
 
 It is necessary that *all* of these configurations be set before any subcommand runs.
 
