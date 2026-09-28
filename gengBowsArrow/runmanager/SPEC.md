@@ -59,13 +59,6 @@ attribute `runConfigs`.
 
 A runpath consists of a string containing two substrings separated by a forward slash. The second substring must be either the word "latest" or a non negative integer.
 
-### 3.0.3 Pure path of a run
-
-A pure path of a run must satisfy the following constraints:
-- It must have the form: `<flakedir>/runs/<runConfigs subattribute>/<"latest" or an integer>`.
-- `<flakedir>` must be a proper flake directory, containing a `flake.nix` file
-- `<flakedir>` must refer to a flake directory *inside* the nix store
-
 
 ### 3.0.4 `runConfigs` schema
 
@@ -117,34 +110,19 @@ The command call is first validated according to 3.0.1
 
 It then valides the `runConfigs` subattribute that was passed as an argument, according to type 3.0.4
 
-### 3.1.1. Database entry
+### 3.1.1 The `runpath` value
 
-The command then validates whether there is a table called `run` in the postgreSQL server given through the URL passed in `databaseUrl`, and validates that it satisfies the schema specified as type 3.0.6.
+This section specified how the `runpath` value for the database entry in section 3.1.2 is determined.
 
-The command then inserts a new entry as follows:
+It is determined at this point in the execution because the program needs to verify if there is any other run in the database whose runpath would be identical to the current run's runpath. If, after determining the runpath value, an identical runpath is found in the database, then the program exits early with an error. This does not apply to entries with the `synthetic-latest` type (whose behaviour is specified at a later section).
 
-* `id` = a unique ID,
-* `host` = name of the user and name of the host where the command was called
-* `runpath` = see section 3.1.1.0
-* `type` = "impure" unless `--pure` flag is passed, in which case "pure"
-* `origin` = see section 3.1.1.1
-* `outputPath` = empty for the moment
-* `startTime` = the time right now,
-* `workdir` = A temporary directory whose path atisfies type 3.0.5, using the values of `runpath` and `startTime`
-* `status` = `initializing` 
-* `endTime` is empty for the moment.
-
-### 3.1.1.0 The `runpath` value
-
-### 3.1.1.0.0 When `type` = "impure"
+### 3.1.1.0 When `type` = "impure"
 
 if `type` = "impure", then
 
 If `flakeref`, which is a local path due to `type` = "impure", does not contain `runs/<runConfigs subattribute for current run>/0`, it is created, and runpath is `<runConfigs subattribute for current run>/0`. If that directory does exists, we create instead `runs/<runConfigs subattribute for current run>/<increment highest number at this path by 1>`, and runpath is `<runConfigs subattribute for current run>/<increment highest number at this path by 1>`
 
-At this point, two side-effects are triggered: first, the new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run. Second, a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory.  
-
-### 3.1.1.0.1 When `type` = "pure"
+### 3.1.1.1 When `type` = "pure"
 
 if `type` = "pure", then
 
@@ -152,17 +130,38 @@ The `run` table is searched for any run whose runpath begins with the same `runC
 
 If no such entry exists, runpath is `<runConfigs subattribute for current run>/0`. Otherwise, it is `<runConfigs subattribute for current run>/<increment highest number at this path in search results by 1>`
 
-### 3.1.1.1 The `origin` value
+### 3.1.2. Database entry
+
+The command then validates whether there is a table called `run` in the postgreSQL server given through the URL passed in `databaseUrl`, and validates that it satisfies the schema specified as type 3.0.6.
+
+The command then inserts a new entry as follows:
+
+* `id` = a unique ID,
+* `host` = name of the user and name of the host where the command was called
+* `runpath` = see section 3.1.1
+* `type` = "impure" unless `--pure` flag is passed, in which case "pure"
+* `origin` = see section 3.1.2.0
+* `outputPath` = empty for the moment
+* `startTime` = the time right now,
+* `workdir` = A temporary directory whose path atisfies type 3.0.5, using the values of `runpath` and `startTime`
+* `status` = `initializing` 
+* `endTime` is empty for the moment.
+
+### 3.1.2.0 The `origin` value
 
 if `type` = "impure", then `origin` is the path of a nix store copy of `flakeref` that includes the new directories.
 if `type` = "pure", then `origin` is `flakeref`
 
+### 3.1.2.1 Side-effects when `type` = "impure"
 
-### 3.1.1.2 The `synthetic-latest` entry
+At this point, immediately after the database insertion, two side-effects are triggered: first, the new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run. Second, a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory.  
+
+
+### 3.1.2.2 The `synthetic-latest` entry
 
 Once runpath and `origin` have been determined, an unrelated side-effect is triggered: if the database contains an entry with runpath `<runConigs subattribute for current run>/latest`, then it is modified to be an exact copy of the latest created entry for this specific run. It is otherwise created and filled with this information. This synthetic entry has type `synthetic-latest` and is expected to mirror exactly the columns of the latest created entry for the current run (with the exception of the `id`, `type`, `runpath` columns), during the entire lifetime of the current run.
 
-### 3.3 Running the job
+### 3.1.3 Running the job
 
 Once the database entry is made, `run` executes the `run-pi-microvm` script using the following options:
 
@@ -178,20 +177,20 @@ Once the database entry is made, `run` executes the `run-pi-microvm` script usin
 
 The `run-pi-microvm` script is resolved from the `runPiMicroVMPath` config value
 
-### 3.4 Monitoring
+### 3.1.4 Monitoring
 
 While the script is running, `runmanager run` monitors the run's state and updates the database entry as follows: 
 * The status changes from `initializing` to `ongoing` once the VM is booted and `pi` is confirmed running. 
 * The status is set to `terminated` only in case the script did not exit correctly (i.e. the virtual machine it ran did not exit correctly or the `pi` process running within it did not exit correctly), in which case `endTime` is set as well. Also, the `workdir` column in the database is set to a null value. 
 * The status is set to `done` if the run finishes without any issues
 
-### 3.4.1 Hook when setting the status to `terminated`
+### 3.1.4.1 Hook when setting the status to `terminated`
 
 If a run's status is set to `terminated` and `type` = "impure", then the corresponding directory in `runs` is deleted and the `latest` symlink is either linked back to the previous run, or deleted if this is run `0`.
 
 If a run's status is set to `terminated`, for both `type` = "pure" and `type` = "impure", the `synthetic-latest` database entry for the current run is either modified to mirror the previous successful run, or is deleted if this is run `0`.
 
-### 3.4.2 Hook when setting the status to `done`
+### 3.1.4.2 Hook when setting the status to `done`
 
 If a run completes successfully, the contents of the `workdir` temporary directory created specifically for this run is copied to the nix store, the value of `outputPath` in the database is updated with its nix store path and also printed to stdout. 
 
@@ -199,7 +198,7 @@ Furthermore, if `type` = "impure", then, after being copied to the nix store, th
 
 Finally, `endTime` for the current run is set to the timestamp corresponding to these steps.
 
-### 3.5. The `follows` attribute
+### 3.1.5. The `follows` attribute
 
 If the `runConfigs` subattribute for the current runs has a `follows` attribute, the behaviour of the `run` subcommand is modified as follows:
 
