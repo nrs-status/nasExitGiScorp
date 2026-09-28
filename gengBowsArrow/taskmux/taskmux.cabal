@@ -1,0 +1,37 @@
+cabal-version:      2.4
+name:               taskmux
+version:            0.1.0.0
+synopsis:           Task-state management for tmux sessions
+description:        taskmux stores a per-tmux-session task state in the
+                    @task-status / @task-description session options and
+                    provides subcommands to set (start), complete (done),
+                    remove (clear) and inspect (list) that state, plus
+                    monitor-pi, which derives the task state from the pi
+                    coding agent harness running in a tmux window.  See
+                    ./SPEC.md and ./SPEC_EXTENSION.md for the full
+                    behavioural specification.
+license:            MIT
+build-type:         Simple
+
+executable taskmux
+    main-is:          Main.hs
+    hs-source-dirs:   src
+    other-modules:    Taskmux.Git
+                      Taskmux.List
+                      Taskmux.Monitor
+                      Taskmux.Options
+                      Taskmux.Pi
+                      Taskmux.Tmux
+                      Taskmux.Tty
+    default-language: Haskell2010
+    ghc-options:      -Wall -O2
+    build-depends:    base >=4 && <5
+                    , aeson
+                    , bytestring
+                    , containers
+                    , directory
+                    , filepath
+                    , process
+                    , text
+                    , time
+                    , unix
