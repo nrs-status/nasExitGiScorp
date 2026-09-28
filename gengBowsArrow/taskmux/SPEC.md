@@ -14,9 +14,9 @@ A task state is stored entirely in two tmux session options:
 | `@task-description`  | Free-form task description text                | `start`    |
 
 `@task-status`: Task status string: "underway" or "done" . 
-- A session is *tasked* if and only if its `@task-status` option is set
+- A session is said to be *tasked* if and only if its `@task-status` option is set
   (non-empty). `@task-description` alone does not make a session tasked.
-- Unsetting both options (`clear`) removes the task state.
+- Unsetting both options (using `taskmux clear`) removes the task state.
 - Options are per-session user options (`@`-prefixed), so they require a
   running tmux server and do not persist beyond the session's lifetime.
 
