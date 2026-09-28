@@ -6,7 +6,7 @@ This document contains a high-level overview of the `pi-openrouter-provider-plug
 
 Any agent using this document as a starting point for implementing the extension is expected to write a second document, SPEC_EXTENSION.md, containing the details missing from this document necessary for the implementation. SPEC_EXTENSION.md should include the interpretation of ambiguities in this document, and design decisions left open or underspecified by this document. The combination of SPEC.md and SPEC_EXTENSION.md should suffice to give a full technical specification of the extension.
 
-This document intends to specify a pi extension written in TypeScript, delivered as a single extension file loaded with `pi -e <path>` (or placed in a pi extension discovery directory). Although the deliverable is a single file, an agent implementing this specification is expected to avoid writing an undifferentiated monolith, and instead factor the program into self-contained pieces, each implementing a singular logically distinct part of the total new extension.
+This document intends to specify a pi extension written in TypeScript, delivered as an extension package: an entry file loadable with `pi -e <path-to-entry>` (or placed in a pi extension discovery directory), together with a package manifest declaring the runtime dependencies the entry file imports, laid out so that pi's documented extension dependency resolution finds the installed dependencies next to the entry file. Runtime dependencies may be used wherever functionality that already exists as a standalone library would otherwise have to be hand-rolled (for example configuration-file parsing or wire-format parsing); this document deliberately does not name, version, or pin specific packages — choosing them is left to the implementer. Whatever the dependency set turns out to be, an agent implementing this specification is expected to avoid writing an undifferentiated monolith, and instead factor the program into self-contained pieces, each implementing a singular logically distinct part of the total new extension.
 
 ## 1. Purpose
 
@@ -43,6 +43,7 @@ type Routing = { mode: "auto" } | { mode: "pin"; provider: string; allowFallback
 | `blacklist`          | `string[]`     | Provider slugs excluded from automatic selection               |
 | `lastDetected`       | `string?`      | Name of the last upstream provider seen serving a request      |
 | `endpointsCache`     | cached object  | Endpoints of the active model, keyed by model id               |
+| `fileConfig`         | `FileConfig?`  | Declarative routing loaded from the configuration file (section 5.1); `undefined` when the file is unset, missing, or invalid |
 
 **Persistence.** `routing` is persisted in the session as a custom entry of type `openrouter-routing` (via `pi.appendEntry`) and `blacklist` as a custom entry of type `openrouter-blacklist` (as `{ providers: string[] }`). Both are restored on `session_start`. Restored values are sanitized: malformed entries fall back to the default (`auto` routing, empty blacklist); blacklist slugs are trimmed, lowercased, and deduplicated.
 
@@ -59,7 +60,7 @@ The upstream provider name is shown in the footer status area under the status k
 Name resolution, in order:
 
 1. The `X-Provider-Name` response header, when OpenRouter sends it (read from the `after_provider_response` event, with header names matched case-insensitively).
-2. The `provider` field of the chat-completion SSE chunks, read by a **stream tap**: the extension wraps the effective OpenRouter provider's fetch so that `text/event-stream` response bodies are tee'd; the tap stream is parsed line-by-line for `data:` chunks (ignoring non-JSON lines and `[DONE]`) and the authoritative upstream `provider` string is extracted from each chunk. The forward stream is handed back to pi untouched. The tap is installed once, lazily, and only when the OpenRouter provider is registered.
+2. The `provider` field of the chat-completion SSE chunks, read by a **stream tap**: the extension wraps the effective OpenRouter provider's fetch so that `text/event-stream` response bodies are tee'd; the tap stream is framed as SSE (via the extension's SSE-parsing runtime dependency) and the authoritative upstream `provider` string is extracted from each `data` event (ignoring non-JSON events and `[DONE]`). The forward stream is handed back to pi untouched. The tap is installed once, lazily, and only when the OpenRouter provider is registered.
 3. Otherwise, the `X-Generation-Id` response header is used to query `GET {baseUrl}/generation?id=<id>`, whose `data.provider_name` is the upstream provider. The generation record is written just after the response arrives, so the lookup retries with a linear backoff (up to 6 attempts). The generation lookup is skipped when the stream tap is installed, since the tap already yields the authoritative name (and pinned generations are not queryable).
 
 The API key is resolved once through `ctx.modelRegistry.getApiKeyForProvider` and reused; the lookup runs in the background so it never delays streaming.
@@ -85,18 +86,55 @@ When `routing.mode === "pin"`, the payload's `provider` field becomes:
 
 Any pre-existing `order` key is removed so `only` takes effect. Other pre-existing keys of the `provider` object are preserved.
 
-When `routing.mode === "auto"` the payload is left untouched — unless the blacklist is non-empty, in which case the payload is rewritten to:
+When `routing.mode === "auto"` the payload is left untouched unless there is something to apply. The effective automatic routing combines the declarative configuration file (section 5.1) with the session blacklist: the preferred order comes from the applicable configuration scope, and the effective ignore list is the **union** of the applicable configuration blacklist and the session blacklist. If both the preferred order and the effective ignore list are empty, the hook returns without modifying the payload. Otherwise the payload is rewritten to:
 
 ```jsonc
 {
   "provider": {
-    "ignore": ["<blacklisted-slug>", ...],
+    "order": ["<preferred-slug>", ...],   // only when a preferred list applies
+    "ignore": ["<slug>", ...],            // only when the effective ignore list is non-empty
     "allow_fallbacks": true
   }
 }
 ```
 
-with the same `order` removal. When the blacklist is empty and mode is `auto`, the hook returns without modifying the payload.
+with the same `order` removal (an injected `order` replaces any pre-existing one; other pre-existing keys of the `provider` object are preserved). An interactive pin always takes precedence over configuration-file routing.
+
+### 5.1 Configuration file (`PI_OPENROUTER_EXTENSION_CONFIG_FILE`)
+
+The extension reads an optional TOML configuration file whose path is taken from the environment variable `PI_OPENROUTER_EXTENSION_CONFIG_FILE` (unset or empty disables declarative routing). The file is (re-)loaded on `session_start` and on `model_select`.
+
+The file has two kinds of routing tables:
+
+- a single `[global]` table whose routing applies to every OpenRouter model, and
+- per-model tables under `[models]`, keyed by the exact model id (quote keys containing `.` or `/`, e.g. `[models."z-ai/glm-5.3-flash"]`).
+
+Both the global table and each per-model table may set the same two keys:
+
+| Key         | Type                  | Meaning                                                                       |
+|-------------|-----------------------|-------------------------------------------------------------------------------|
+| `preferred` | array of slug strings | Providers to be tried sequentially, in list order (injected as `provider.order`) |
+| `blacklist` | array of slug strings | Providers excluded from automatic selection (injected as `provider.ignore`)   |
+
+Example:
+
+```toml
+[global]
+preferred = ["deepinfra", "together"]   # tried in this order
+blacklist = ["chutes"]
+
+[models."z-ai/glm-5.3-flash"]
+preferred = ["moonshotai"]
+blacklist = []
+```
+
+Semantics and edge cases:
+
+- **Precedence.** A model-specific table has higher precedence than the global table. If a `[models."<id>"]` table exists for the active model id (exact, case-sensitive match), the global configuration is ignored *entirely* for that model: the two scopes are never merged per key, and a model table that sets only one of the two keys still disables both keys of the global configuration.
+- **Interaction with the session.** An interactive pin (`/openrouter pin`/`prefer`, or the picker) overrides configuration-file routing; `/openrouter auto` returns to it. In automatic mode the effective ignore list is the union of the applicable configuration blacklist and the session blacklist, while the preferred order comes only from the configuration file. Configuration-driven routing always sends `allow_fallbacks: true`. Configuration blacklists are not editable in the picker: the picker and `block`/`unblock` manage only the session blacklist.
+- **Invalid or missing file.** A missing, unreadable, or syntactically invalid file — or a file whose `preferred`/`blacklist` values are not arrays of non-empty strings — is rejected as a whole: the error is logged and the extension behaves as if no configuration file were set; a configuration problem can never break the extension or the request. Configured slugs are trimmed, lowercased, and deduplicated. Unknown keys inside the routing tables are ignored. The file must be standard TOML, parsed with the extension's TOML runtime dependency; anything the parser rejects (including constructs outside TOML's standard syntax) makes the file invalid.
+- **Reference example.** A commented example configuration ships with the package (`config.example.toml`). It is purely for reference: nothing in the extension reads it, and it is never loaded — the file that is used is only ever the one `PI_OPENROUTER_EXTENSION_CONFIG_FILE` points at.
+- **Observability.** While a configuration preferred list applies in automatic mode, the footer status shows `order:<n>` (in addition to `blacklisted:<n>`, which counts the effective ignore list, and `pin:<slug>` while pinned, which suppresses both). `/openrouter status` reports the configuration file path and the scope that applies (`model` or `global`), or the parse error that caused the file to be rejected.
 
 ## 6. Commands
 
@@ -145,7 +183,8 @@ Blacklisted providers are marked with `✗`, persisted in the session (section 3
 
 | Environment variable | Effect |
 |----------------------|--------|
-| `PI_OPENROUTER_PROVIDER_LOG_PATH` | Append a timestamped trace of detection, routing, stream-tap, and lookup events to this file. |
+| `PI_OPENROUTER_PROVIDER_LOG_PATH` | Append a timestamped trace of detection, routing, stream-tap, lookup, and configuration-file events to this file. |
+| `PI_OPENROUTER_EXTENSION_CONFIG_FILE` | Path of the TOML routing configuration file (section 5.1); unset or empty disables declarative routing. |
 
 Logging must never break the extension: write failures are silently ignored.
 

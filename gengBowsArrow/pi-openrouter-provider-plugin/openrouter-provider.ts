@@ -26,9 +26,18 @@
  *      a menu item toggles (blacklists) it instead of pinning it. A
  *      blacklisted provider is excluded from OpenRouter's automatic
  *      provider choice via the `provider.ignore` routing field.
+ *   5. Reads an optional TOML configuration file (path taken from the
+ *      PI_OPENROUTER_EXTENSION_CONFIG_FILE environment variable) that
+ *      declaratively prefers and/or blacklists providers, globally and/or
+ *      per model. See SPEC.md section 5.1. TOML parsing and SSE framing are
+ *      provided by runtime dependencies (smol-toml, eventsource-parser).
  *
  * Usage:
- *   pi -e ./openrouter-provider.ts
+ *   PI_OPENROUTER_EXTENSION_CONFIG_FILE=/etc/openrouter-routing.toml \
+ *     pi -e ./openrouter-provider.ts
+ *
+ * Runtime dependencies (declared in ./package.json, resolved from
+ * ./node_modules next to this file): smol-toml, eventsource-parser.
  *
  * Commands:
  *   /openrouter                      interactive provider picker
@@ -45,7 +54,9 @@
  * Debugging: set PI_OPENROUTER_PROVIDER_LOG=/path/to/log to append a trace.
  */
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
+import { parse as parseToml } from "smol-toml";
+import { EventSourceParserStream } from "eventsource-parser/stream";
 import type { ExtensionAPI, ExtensionContext, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { Provider } from "@earendil-works/pi-ai";
 import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
@@ -149,8 +160,16 @@ function safeUi(ctx: ExtensionContext, fn: (ui: ExtensionContext["ui"]) => void)
 function renderStatus(ctx: ExtensionContext): void {
 	const parts: string[] = [];
 	if (lastDetected) parts.push(lastDetected);
-	if (routing.mode === "pin" && routing.provider) parts.push(`pin:${routing.provider}`);
-	if (blacklist.length > 0) parts.push(`blacklisted:${blacklist.length}`);
+	if (routing.mode === "pin" && routing.provider) {
+		parts.push(`pin:${routing.provider}`);
+	} else {
+		// Automatic mode: report the effective (config ∪ session) exclusions and
+		// a declarative preferred order from the configuration file, if any.
+		const ignore = effectiveIgnore(ctx.model?.id);
+		if (ignore.length > 0) parts.push(`blacklisted:${ignore.length}`);
+		const order = resolveConfig(ctx.model?.id).config?.preferred ?? [];
+		if (order.length > 0) parts.push(`order:${order.length}`);
+	}
 	const text = parts.length > 0 ? `⇢ ${parts.join(" · ")}` : undefined;
 	safeUi(ctx, (ui) => ui.setStatus(STATUS_KEY, text));
 }
@@ -184,6 +203,118 @@ async function ensureKey(ctx: ExtensionContext): Promise<string | undefined> {
 	}
 	keyResolved = true;
 	return cachedKey;
+}
+
+// ---------------------------------------------------------------------------
+// Configuration file (PI_OPENROUTER_EXTENSION_CONFIG_FILE)
+//
+// A TOML file that declaratively routes requests: a `[global]` table whose
+// settings apply to every OpenRouter model, and per-model tables under
+// `[models."<model-id>"]`. Both kinds of table may set two keys:
+//
+//   preferred = ["slug-a", "slug-b"]   → provider.order (tried in list order)
+//   blacklist = ["slug-c"]             → provider.ignore
+//
+// A model-specific table has higher precedence than the global one: if a
+// table exists for the active model id, the global table is ignored
+// entirely. See SPEC.md section 5.1.
+// ---------------------------------------------------------------------------
+
+interface ProviderRoutingConfig {
+	/** Providers tried sequentially, in list order (provider.order). */
+	preferred: string[];
+	/** Providers excluded from automatic selection (provider.ignore). */
+	blacklist: string[];
+}
+
+interface FileConfig {
+	/** Absolute or relative path the configuration was loaded from. */
+	path: string;
+	/** Routing that applies to every OpenRouter model. */
+	global?: ProviderRoutingConfig;
+	/** Per-model routing, keyed by exact model id. */
+	models: Map<string, ProviderRoutingConfig>;
+}
+
+let fileConfig: FileConfig | undefined;
+let fileConfigError: string | undefined;
+
+// TOML parsing is provided by the smol-toml runtime dependency (see package.json).
+
+/** Trim, lowercase and deduplicate a configured provider-slug list. */
+function sanitizeConfigSlugs(value: unknown, what: string): string[] {
+	if (!Array.isArray(value)) throw new Error(`${what} must be an array of provider slugs`);
+	const slugs: string[] = [];
+	for (const item of value) {
+		if (typeof item !== "string" || !item.trim()) throw new Error(`${what} must contain only non-empty strings`);
+		slugs.push(item.trim().toLowerCase());
+	}
+	return [...new Set(slugs)];
+}
+
+function extractRoutingTable(raw: unknown, what: string): ProviderRoutingConfig {
+	if (raw === undefined) return { preferred: [], blacklist: [] };
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${what} must be a table`);
+	const table = raw as Record<string, unknown>;
+	const config: ProviderRoutingConfig = { preferred: [], blacklist: [] };
+	if (table.preferred !== undefined) config.preferred = sanitizeConfigSlugs(table.preferred, `${what}.preferred`);
+	if (table.blacklist !== undefined) config.blacklist = sanitizeConfigSlugs(table.blacklist, `${what}.blacklist`);
+	return config;
+}
+
+/**
+ * (Re-)load the configuration file named by PI_OPENROUTER_EXTENSION_CONFIG_FILE.
+ * Any problem (missing file, parse error, wrong value types) is logged and the
+ * configuration is treated as absent; it can never break the extension.
+ */
+function loadConfigFile(): void {
+	fileConfig = undefined;
+	fileConfigError = undefined;
+	const path = process.env.PI_OPENROUTER_EXTENSION_CONFIG_FILE?.trim();
+	if (!path) return;
+	try {
+		const text = readFileSync(path, "utf8");
+		const root = parseToml(text) as Record<string, unknown>;
+		const models = new Map<string, ProviderRoutingConfig>();
+		if (root.models !== undefined) {
+			if (!root.models || typeof root.models !== "object" || Array.isArray(root.models)) {
+				throw new Error("[models] must be a table of per-model tables");
+			}
+			for (const [modelId, table] of Object.entries(root.models as Record<string, unknown>)) {
+				models.set(modelId, extractRoutingTable(table, `[models."${modelId}"]`));
+			}
+		}
+		const globalConfig = root.global !== undefined ? extractRoutingTable(root.global, "[global]") : undefined;
+		fileConfig = { path, global: globalConfig, models };
+		log(
+			`config file loaded: ${path} global=${JSON.stringify(globalConfig)} ` +
+				`models=${JSON.stringify([...models.entries()])}`,
+		);
+	} catch (error) {
+		fileConfigError = `${path}: ${error instanceof Error ? error.message : String(error)}`;
+		log(`config file ignored (${fileConfigError})`);
+	}
+}
+
+type ConfigScope = "model" | "global" | "none";
+
+/**
+ * The routing configuration that applies to `modelId`: the model-specific
+ * table when one exists (it wins over the global table entirely), otherwise
+ * the global table, otherwise nothing.
+ */
+function resolveConfig(modelId: string | undefined): { scope: ConfigScope; config?: ProviderRoutingConfig } {
+	if (!fileConfig || !modelId) return { scope: "none" };
+	const modelSpecific = fileConfig.models.get(modelId);
+	if (modelSpecific) return { scope: "model", config: modelSpecific };
+	if (fileConfig.global) return { scope: "global", config: fileConfig.global };
+	return { scope: "none" };
+}
+
+/** The effective ignore list for automatic mode: config ∪ session blacklist. */
+function effectiveIgnore(modelId: string | undefined): string[] {
+	const configured = resolveConfig(modelId).config?.blacklist ?? [];
+	return [...new Set([...configured, ...blacklist])];
 }
 
 /**
@@ -227,45 +358,32 @@ function onProviderDetected(name: string): void {
 
 /**
  * Read an OpenRouter SSE body in parallel with the provider, pulling the
- * `provider` field out of the chat-completion chunks (every chunk carries it).
- * The tap stream is consumed and discarded; the forward stream is handed back
- * to the SDK untouched.
+ * `provider` field out of the chat-completion events (every event carries it).
+ * SSE framing (line buffering, BOM/CR handling, multi-line data) is delegated
+ * to the eventsource-parser runtime dependency. The tap stream is consumed and
+ * discarded; the forward stream is handed back to the SDK untouched.
  */
 function tapSseStream(stream: ReadableStream<Uint8Array>, onProvider: (name: string) => void): void {
-	const reader = stream.getReader();
-	const decoder = new TextDecoder();
-	let buffer = "";
 	void (async () => {
 		try {
+			const events = stream
+				.pipeThrough(new TextDecoderStream())
+				.pipeThrough(new EventSourceParserStream())
+				.getReader();
 			for (;;) {
-				const { done, value } = await reader.read();
+				const { done, value } = await events.read();
 				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
-				let newline: number;
-				while ((newline = buffer.indexOf("\n")) >= 0) {
-					const line = buffer.slice(0, newline).trim();
-					buffer = buffer.slice(newline + 1);
-					if (!line.startsWith("data:")) continue;
-					const data = line.slice(5).trim();
-					if (!data || data === "[DONE]") continue;
-					try {
-						const chunk = JSON.parse(data) as { provider?: unknown };
-						if (typeof chunk.provider === "string" && chunk.provider) onProvider(chunk.provider);
-					} catch {
-						/* not JSON; ignore */
-					}
+				const data: string = value.data;
+				if (!data || data === "[DONE]") continue;
+				try {
+					const chunk = JSON.parse(data) as { provider?: unknown };
+					if (typeof chunk.provider === "string" && chunk.provider) onProvider(chunk.provider);
+				} catch {
+					/* not JSON; ignore */
 				}
-				// Guard against a pathological body producing an unbounded buffer.
-				if (buffer.length > 1_000_000) buffer = buffer.slice(-10_000);
 			}
 		} catch (error) {
 			log(`stream tap ended early: ${String(error)}`);
-		} finally {
-			try {
-				reader.releaseLock();
-			} catch {
-				/* ignore */
-			}
 		}
 	})();
 }
@@ -573,11 +691,20 @@ async function listProviders(ctx: ExtensionCommandContext): Promise<void> {
 	ctx.ui.notify(`Providers for ${ctx.model?.id}:\n${lines.join("\n")}`, "info");
 }
 
-function describeRouting(): string {
+function describeRouting(modelId: string | undefined): string {
 	if (routing.mode === "pin" && routing.provider) {
 		return `pinned to "${routing.provider}"${routing.allowFallbacks ? " (fallbacks allowed)" : " (no fallbacks)"}`;
 	}
-	return `automatic (OpenRouter decides)${blacklist.length > 0 ? `, blacklisted: ${blacklist.join(", ")}` : ""}`;
+	const bits: string[] = ["automatic (OpenRouter decides)"];
+	const resolved = resolveConfig(modelId);
+	if (resolved.config && (resolved.config.preferred.length > 0 || resolved.config.blacklist.length > 0)) {
+		bits.push(`config ${resolved.scope} scope`);
+		if (resolved.config.preferred.length > 0) bits.push(`preferred: ${resolved.config.preferred.join(", ")}`);
+	}
+	const ignore = effectiveIgnore(modelId);
+	if (ignore.length > 0) bits.push(`blacklisted: ${ignore.join(", ")}`);
+	if (fileConfigError) bits.push(`config file invalid (${fileConfigError})`);
+	return bits.join(", ");
 }
 
 async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Promise<void> {
@@ -598,12 +725,23 @@ async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Pro
 			setRouting({ mode: "auto" }, ctx);
 			return;
 		case "status":
-		case "info":
+		case "info": {
+			let configLine: string;
+			if (fileConfigError) configLine = `Config: file invalid (${fileConfigError})`;
+			else if (!fileConfig) configLine = "Config: no configuration file (PI_OPENROUTER_EXTENSION_CONFIG_FILE unset)";
+			else {
+				const resolved = resolveConfig(ctx.model?.id);
+				configLine =
+					resolved.scope === "none"
+						? `Config: ${fileConfig.path} (no applicable routing)`
+						: `Config: ${fileConfig.path} (${resolved.scope} scope)`;
+			}
 			ctx.ui.notify(
-				`OpenRouter routing: ${describeRouting()}.\nLast served by: ${lastDetected ?? "(unknown)"}`,
+				`OpenRouter routing: ${describeRouting(ctx.model?.id)}.\n${configLine}\nLast served by: ${lastDetected ?? "(unknown)"}`,
 				"info",
 			);
 			return;
+		}
 		case "list":
 			await listProviders(ctx);
 			return;
@@ -665,6 +803,7 @@ async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Pro
 export default function (pi: ExtensionAPI): void {
 	api = pi;
 	pi.on("session_start", async (_event, ctx) => {
+	loadConfigFile();
 	const entries = ctx.sessionManager.getEntries();
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i] as { type?: string; customType?: string; data?: unknown };
@@ -689,6 +828,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("model_select", async (_event, ctx) => {
+		loadConfigFile();
 		lastDetected = undefined;
 		keyResolved = false;
 		endpointsCache = undefined;
@@ -714,7 +854,10 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", (event, ctx) => {
 		if (!isOpenRouterModel(ctx.model)) return;
-		log(`request: model=${ctx.model?.id} routing=${JSON.stringify(routing)} blacklist=${JSON.stringify(blacklist)}`);
+		log(
+			`request: model=${ctx.model?.id} routing=${JSON.stringify(routing)} blacklist=${JSON.stringify(blacklist)} ` +
+				`config=${fileConfig ? "loaded" : fileConfigError ? `invalid (${fileConfigError})` : "unset"}`,
+		);
 		const payload =
 			event.payload && typeof event.payload === "object" ? (event.payload as Record<string, unknown>) : {};
 		const existing =
@@ -731,16 +874,22 @@ export default function (pi: ExtensionAPI): void {
 			log(`injecting provider routing: ${JSON.stringify(provider)}`);
 			return { ...payload, provider };
 		}
-		// Automated (auto) selection mode: keep the blacklisted providers away
-		// from OpenRouter's choice via `provider.ignore`.
-		if (blacklist.length === 0) return;
+		// Automatic (auto) selection mode: apply the declarative routing from the
+		// configuration file (model-specific scope wins over the global one) and
+		// keep both configured and interactively blacklisted providers away from
+		// OpenRouter's choice via `provider.ignore`.
+		const resolved = resolveConfig(ctx.model?.id);
+		const order = resolved.config?.preferred ?? [];
+		const ignore = effectiveIgnore(ctx.model?.id);
+		if (order.length === 0 && ignore.length === 0) return;
 		const provider: Record<string, unknown> = {
 			...existing,
-			ignore: [...blacklist],
 			allow_fallbacks: true,
 		};
 		delete provider.order;
-		log(`injecting provider blacklist: ${JSON.stringify(provider)}`);
+		if (ignore.length > 0) provider.ignore = ignore;
+		if (order.length > 0) provider.order = order;
+		log(`injecting auto routing (config scope=${resolved.scope}): ${JSON.stringify(provider)}`);
 		return { ...payload, provider };
 	});
 

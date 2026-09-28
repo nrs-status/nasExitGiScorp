@@ -1,0 +1,50 @@
+# Example routing configuration for the pi-openrouter-provider-plugin.
+#
+# Reference only: this file is not read by the extension. To use a routing
+# configuration, point the environment variable
+# PI_OPENROUTER_EXTENSION_CONFIG_FILE at your own TOML file (this one or a
+# copy of it), e.g.:
+#
+#   PI_OPENROUTER_EXTENSION_CONFIG_FILE=~/.config/pi/openrouter-routing.toml pi
+#
+# The file is re-read on session start and whenever the model changes.
+#
+# Two kinds of routing tables are understood:
+#
+#   [global]                applies to every OpenRouter model
+#   [models."<model-id>"]   applies to one exact model id
+#
+# Both kinds accept the same two keys:
+#
+#   preferred = [...]   providers tried sequentially, in list order
+#                       (sent to OpenRouter as provider.order)
+#   blacklist = [...]   providers excluded from automatic selection
+#                       (sent to OpenRouter as provider.ignore)
+#
+# Precedence: a [models] table for the active model wins over [global]
+# entirely — the two are never merged per key. An interactive pin
+# (/openrouter pin, or the picker) overrides the file; /openrouter auto
+# returns to it. The interactive session blacklist (picker toggles,
+# /openrouter block) is combined with (unioned into) the file's blacklist.
+#
+# Provider slugs must match OpenRouter's provider slugs (see
+# /openrouter list). Slugs are case-insensitive; duplicates are dropped.
+
+[global]
+# Try these providers first, in this order, for every OpenRouter model;
+# OpenRouter may still fall back to other providers.
+preferred = ["deepinfra", "together"]
+# Never route automatic requests through these providers.
+blacklist = ["chutes"]
+
+[models."z-ai/glm-5.3-flash"]
+# Model-specific tables need the exact model id as shown by /openrouter
+# status or pi's /model command; quote keys containing "." or "/".
+preferred = ["moonshotai", "deepinfra"]
+blacklist = []
+# Because this table exists, the [global] table above is ignored entirely
+# for this model — even the keys it does not set.
+
+[models."anthropic/claude-fable-latest"]
+# A table may set only one key; the other is simply empty.
+blacklist = ["wafer"]

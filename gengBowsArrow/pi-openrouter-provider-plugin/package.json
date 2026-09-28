@@ -1,0 +1,14 @@
+{
+  "name": "pi-openrouter-provider-plugin",
+  "version": "0.1.0",
+  "description": "pi extension that surfaces and steers the upstream provider OpenRouter routes requests to",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": ["./openrouter-provider.ts"]
+  },
+  "dependencies": {
+    "eventsource-parser": "^3.0.6",
+    "smol-toml": "^1.4.1"
+  }
+}
