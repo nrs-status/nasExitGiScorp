@@ -74,7 +74,7 @@ This is the type of `runConfigs` subattributes.
 A subattribute of `runConfigs` must have a value of the form:
 
     roDirs: list of paths to directories
-    follows: list of paths of type 3.0.3
+    follows: list of runpaths (as specified by type 3.0.2)
     disk:   string
     ram:    string
     model:  string
@@ -144,7 +144,7 @@ if `type` = "impure", then
 
 If `flakeref`, which is a local path due to `type` = "impure", does not contain `runs/<runConfigs subattribute for current run>/0`, it is created, and runpath is `<runConfigs subattribute for current run>/0`. If that directory does exists, we create instead `runs/<runConfigs subattribute for current run>/<increment highest number at this path by 1>`, and runpath is `<runConfigs subattribute for current run>/<increment highest number at this path by 1>`
 
-At this point, an unrelated side-effect is triggered: a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory
+At this point, two side-effects are triggered: first, the new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run. Second, a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory.  
 
 ### 3.1.1.0.1 When `type` = "pure"
 
@@ -153,10 +153,6 @@ if `type` = "pure", then
 The `run` table is searched for any run whose runpath begins with the same `runConfigs` subattribute as the current run. Runs with status `terminated` are ignored.
 
 If no such entry exists, runpath is `<runConfigs subattribute for current run>/0`. Otherwise, it is `<runConfigs subattribute for current run>/<increment highest number at this path in search results by 1>`
-
-### 3.1.1.0.2 For both `type` = "pure" and `type` = "impure"
-
-The new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run.
 
 ### 3.1.1.1 The `origin` value
 
@@ -180,7 +176,7 @@ Once the database entry is made, `run` executes the `run-pi-microvm` script usin
   the TOML config (the key itself is never copied, logged, or printed; only
   the path is handed to the script),
 * the prompt from `prompt` is passed on stdin.
-* `streamSocketFile` is passed as the output for the json stream
+* `streamSocketFile` is passed as the output for the json stream, which is the stdout of `run-pi-microvm`
 
 The `run-pi-microvm` script is resolved from the `runPiMicroVMPath` config value
 
@@ -207,9 +203,9 @@ Finally, `endTime` for the current run is set to the timestamp corresponding to 
 
 ### 3.5. The `follows` attribute
 
-If the `runConfigs` subattribute for the current runs as a `follows` attribute, the behaviour of the `run` subcommand is modified as follows:
+If the `runConfigs` subattribute for the current runs has a `follows` attribute, the behaviour of the `run` subcommand is modified as follows:
 
-If a path in the `follows` subattribute designates a run that is currently ongoing, then the `run` subcommand waits until its completion before beginning normal execution. 
+If a runpath in the `follows` subattribute designates a run that is currently ongoing, then the `run` subcommand waits until its completion before beginning normal execution. 
 
 This is the only case where behaviour changes. If not path in the `follows` subattribute designates a run that is currently ongoing, then the attribute is ignored.
 
