@@ -1,0 +1,8 @@
+# Subreddit names may be written with or without the r/ prefix.
+subreddits = ["AskReddit", "NixOS"]
+
+[scraper]
+# Reddit's listing API permits at most 100 items per request.
+limit_per_subreddit = 100
+# A conservative cycle interval; the scraper also honors Reddit's rate headers.
+poll_interval_seconds = 900

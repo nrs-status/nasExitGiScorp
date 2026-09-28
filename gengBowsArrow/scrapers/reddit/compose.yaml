@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-reddit}
+      POSTGRES_USER: ${POSTGRES_USER:-reddit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - reddit-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  scraper:
+    build: .
+    environment:
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:?Set Reddit OAuth credentials in .env}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:?Set Reddit OAuth credentials in .env}
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-linux:reddit-scraper:1.0 (by /u/yourname)}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-reddit}
+      PGUSER: ${POSTGRES_USER:-reddit}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      REDDIT_CONFIG: /config/config.toml
+    volumes:
+      - ./config.toml:/config/config.toml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  reddit-postgres:
