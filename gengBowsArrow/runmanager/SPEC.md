@@ -30,7 +30,7 @@ TOML configuration file. The config contains:
   be non-empty (and ideally have mode 0600).
 * `runPiMicroVMPath` - path to the `run-pi-microvm` script
 * `listedStatuses` - a string of unordered characters (see section 4 for usage)
-* `streamSocketFile` - path to a file that will be used as the socket to stream `run-pi-microvm`'s JSON output. The file may or may not exist yet.
+* `streamOutputFile` - path to a file that will be used as the socket to stream `run-pi-microvm`'s JSON output. The file may or may not exist yet.
 
 It is necessary that *all* of these configurations be set before any subcommand runs.
 
@@ -81,8 +81,6 @@ A subattribute of `runConfigs` must have a value of the form:
     prompt: string
 
 The `roDirs` and `follows` attributes are optional
-
-The directories whose paths are in `follows` must be empty
 
 The `disk` and `ram` strings must contain an integer followed by "MB" or "GB"
 
@@ -156,7 +154,7 @@ If no such entry exists, runpath is `<runConfigs subattribute for current run>/0
 
 ### 3.1.1.1 The `origin` value
 
-if `type` = "impure", then `origin` is the path of a nix store copy of `flakeref` that includes the new directories
+if `type` = "impure", then `origin` is the path of a nix store copy of `flakeref` that includes the new directories.
 if `type` = "pure", then `origin` is `flakeref`
 
 
@@ -176,7 +174,7 @@ Once the database entry is made, `run` executes the `run-pi-microvm` script usin
   the TOML config (the key itself is never copied, logged, or printed; only
   the path is handed to the script),
 * the prompt from `prompt` is passed on stdin.
-* `streamSocketFile` is passed as the output for the json stream, which is the stdout of `run-pi-microvm`
+* `streamOutputFile` is passed as the output for the json stream
 
 The `run-pi-microvm` script is resolved from the `runPiMicroVMPath` config value
 
@@ -195,9 +193,9 @@ If a run's status is set to `terminated`, for both `type` = "pure" and `type` = 
 
 ### 3.4.2 Hook when setting the status to `done`
 
-If a run completes successfully, the contents of the `workdir` temporary directory created specifically for this run is moved to the nix store, the value of `outputPath` in the database is updated with its nix store path and also printed to stdout. 
+If a run completes successfully, the contents of the `workdir` temporary directory created specifically for this run is copied to the nix store, the value of `outputPath` in the database is updated with its nix store path and also printed to stdout. 
 
-Furthermore, if `type` = "impure", then the contents of `workdir` is also copied to `<impure flakeref>/runs/<runpath>`
+Furthermore, if `type` = "impure", then, after being copied to the nix store, the contents of `workdir` are also copied to `<impure flakeref>/runs/<runpath>`
 
 Finally, `endTime` for the current run is set to the timestamp corresponding to these steps.
 
@@ -219,5 +217,7 @@ This command lists the entries of the postgresql's URL's  `run` table according 
      t      # only terminated
      i      # only initializing
      it     # only initializing and terminated
+
+Furthermore, the `list` subcommand optionally takes the `--no-latest` flag, which omits any entry whose type is `synthetic-latest`.
 
 The output is a nushell-friendly table: whitespace-aligned columns whose first line holds single-word headers (same as the columns in type 3.0.6), with space-free ISO-8601 timestamps and no decoration rows, so that piping it into nushell's `detect columns` yields a proper structured table.
