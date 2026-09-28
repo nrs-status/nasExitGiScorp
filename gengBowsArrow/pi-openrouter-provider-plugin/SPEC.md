@@ -6,7 +6,7 @@ This document contains a high-level overview of the `pi-openrouter-provider-plug
 
 Any agent using this document as a starting point for implementing the extension is expected to write a second document, SPEC_EXTENSION.md, containing the details missing from this document necessary for the implementation. SPEC_EXTENSION.md should include the interpretation of ambiguities in this document, and design decisions left open or underspecified by this document. The combination of SPEC.md and SPEC_EXTENSION.md should suffice to give a full technical specification of the extension.
 
-This document intends to specify a pi extension written in TypeScript, delivered as a single extension file loaded with `pi -e <path>` (or placed in a pi extension discovery directory). Although the deliverable is a single file, an agent implementing this specification is expected to avoid writing an undifferentiated monolith, and instead factor the program into self-contained pieces implementing a singular logically distinct part of the total extension (detection, state, status rendering, stream tapping, API lookups, command handling).
+This document intends to specify a pi extension written in TypeScript, delivered as a single extension file loaded with `pi -e <path>` (or placed in a pi extension discovery directory). Although the deliverable is a single file, an agent implementing this specification is expected to avoid writing an undifferentiated monolith, and instead factor the program into self-contained pieces, each implementing a singular logically distinct part of the total new extension.
 
 ## 1. Purpose
 
@@ -16,7 +16,7 @@ The extension has three responsibilities:
 
 1. **Detect** when the active model is served through OpenRouter.
 2. **Display** the upstream provider that actually served each request.
-3. **Change** the upstream provider interactively (pin or prefer), by injecting the OpenRouter `provider` routing field into outgoing requests, and **exclude** providers from OpenRouter's automatic choice by blacklisting them.
+3. **Change** the upstream provider interactively (pin or prefer) or declaratively (using a configuration file), by injecting the OpenRouter `provider` routing field into outgoing requests, and **exclude** providers from OpenRouter's automatic choice by blacklisting them.
 
 The extension is inert whenever the active model is not OpenRouter-backed: it never touches the request payload, never queries the API, and never writes status (see section 2).
 
@@ -145,7 +145,7 @@ Blacklisted providers are marked with `✗`, persisted in the session (section 3
 
 | Environment variable | Effect |
 |----------------------|--------|
-| `PI_OPENROUTER_PROVIDER_LOG` | Append a timestamped trace of detection, routing, stream-tap, and lookup events to this file. |
+| `PI_OPENROUTER_PROVIDER_LOG_PATH` | Append a timestamped trace of detection, routing, stream-tap, and lookup events to this file. |
 
 Logging must never break the extension: write failures are silently ignored.
 
