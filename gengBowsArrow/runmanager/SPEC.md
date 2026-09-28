@@ -10,11 +10,13 @@ This document intends to specify a Haskell program. It is expected that any agen
 
 ## 1. Overview
 
-`runmanager` is a command line tool that manages runs of the pi microvm runner `run-pi-microvm` (from the `nasExitGiScorp` flake) whose configuration lives in the `runConfigs` attribute set of a nix flake. Every run is tracked from creation to completion in a postgresql server containing a database that has a `run` table. 
-
-The server is included as a deliverable, packaged as a container.
+`runmanager` is a command line tool that manages runs of the pi microvm runner `run-pi-microvm` (from the `nasExitGiScorp` flake) whose configuration lives in the `runConfigs` attribute set of a nix flake. Every run is tracked from creation to completion in a postgresql server included as a deliverable, packaged as a container.
 
 The tool has two subcommands: `run` and `list`.
+
+## 2. Postgres container
+
+The postgres container is delivered as a script `db-container.sh` that uses `podman` to start it or create it. Its container file must guarantee the server contains a database that has a `run` table. 
 
 ## 2. Common option
 
@@ -34,8 +36,7 @@ TOML configuration file. The config contains:
 
 It is necessary that *all* of these configurations be set before any subcommand runs.
 
-These configurations can also be set individually as environment variables or command line options . The path to the config file can also be given as an environment variable. Command line options take precedence, then come environment variables.
-
+These configurations can also be set individually as environment variables or command line options. The path to the config file can also be given as an environment variable. Command line options take precedence, then come environment variables.
 
 ## 3. The `run` subcommand
 
@@ -59,7 +60,6 @@ attribute `runConfigs`.
 
 A runpath consists of a string containing two substrings separated by a forward slash. The second substring must be either the word "latest" or a non negative integer.
 
-
 ### 3.0.4 `runConfigs` schema
 
 This is the type of `runConfigs` subattributes.
@@ -80,7 +80,6 @@ The `disk` and `ram` strings must contain an integer followed by "MB" or "GB"
 The `model` string must contain three substrings separated by two forward slashes, e.g. "openrouter/z-ai/glm-5.3-flash"
 
 ### 3.0.5 `workdir` path
-
 
 A `workdir` path is the path of a temporary directory, created for a single specific run, in `$TMPDIR`, using a runpath `<runConfigs subattribute>/<run number>`as a reference and timestamped with the `startTime` column value, as follows: `$TMPDIR/<runConfigs subattribute>-<run number>-<timestamp>`
 
@@ -114,7 +113,7 @@ It then valides the `runConfigs` subattribute that was passed as an argument, ac
 
 This section specified how the `runpath` value for the database entry in section 3.1.2 is determined.
 
-It is determined at this point in the execution because the program needs to verify if there is any other run in the database whose runpath would be identical to the current run's runpath. If, after determining the runpath value, an identical runpath is found in the database, then the program exits early with an error. This does not apply to entries with the `synthetic-latest` type (whose behaviour is specified at a later section).
+It is determined at this point in the execution because the program needs to verify if there is any other run in the database whose runpath would be identical to the current run's runpath. If, after determining the runpath value, an identical runpath is found in the database, then the program exits early with an error. This does not apply to entries with the `synthetic-latest` type (whose behaviour is specified at a later section) or entries with the `terminated` status (also specified in a later section).
 
 ### 3.1.1.0 When `type` = "impure"
 
@@ -154,8 +153,7 @@ if `type` = "pure", then `origin` is `flakeref`
 
 ### 3.1.2.1 Side-effects when `type` = "impure"
 
-At this point, immediately after the database insertion, two side-effects are triggered: first, the new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run. Second, a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created empty directory.  
-
+At this point, immediately after the database insertion, two side-effects are triggered: first, the new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run. Second, a symlink is created or updated at `<flakeref>/runs/<runConfigs subattribute for current run>/latest` so that it links to the latest created directory for this run.  
 
 ### 3.1.2.2 The `synthetic-latest` entry
 
