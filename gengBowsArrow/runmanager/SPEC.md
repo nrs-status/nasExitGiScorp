@@ -102,7 +102,7 @@ The Postgresql schema for the `run` table is as follows:
     runpath: string of type 3.0.2
     type: one of: pure, impure, synthetic-latest
     origin: nix store flakeref
-    target: null or nix store path
+    outputPath: null or nix store path
     workdir: null or a path of type 3.0.5
     status:                one of: ongoing, done, initializing, terminated
     startTime:           datetime
@@ -130,7 +130,7 @@ The command then inserts a new entry as follows:
 * `runpath` = see section 3.1.1.0
 * `type` = "impure" unless `--pure` flag is passed, in which case "pure"
 * `origin` = see section 3.1.1.1
-* `output` = empty for the moment
+* `outputPath` = empty for the moment
 * `startTime` = the time right now,
 * `workdir` = A temporary directory whose path atisfies type 3.0.5, using the values of `runpath` and `startTime`
 * `status` = `initializing` 
@@ -154,6 +154,10 @@ The `run` table is searched for any run whose runpath begins with the same `runC
 
 If no such entry exists, runpath is `<runConfigs subattribute for current run>/0`. Otherwise, it is `<runConfigs subattribute for current run>/<increment highest number at this path in search results by 1>`
 
+### 3.1.1.0.2 For both `type` = "pure" and `type` = "impure"
+
+The new runpath is populated by a file called `manifest.json`, a JSON representation of the value of the `runConfigs` subattribute for the current run.
+
 ### 3.1.1.1 The `origin` value
 
 if `type` = "impure", then `origin` is the path of a nix store copy of `flakeref` that includes the new directories
@@ -162,7 +166,7 @@ if `type` = "pure", then `origin` is `flakeref`
 
 ### 3.1.1.2 The `synthetic-latest` entry
 
-Once runpath and `origin` have been determined, an unrelated side-effect is triggered: if the database contains an entry with runpath `<runConigs subattribute for current run>/latest`, then it is modified to be an exact copy of the latest created entry for this specific run. It is otherwise created and filled with this information. This synthetic entry has type `synthetic-latest` and is expected to mirror exactly the columns of the latest created entry for the current run (with the exception of the `type`, `runpath` columns), during the entire lifetime of the current run.
+Once runpath and `origin` have been determined, an unrelated side-effect is triggered: if the database contains an entry with runpath `<runConigs subattribute for current run>/latest`, then it is modified to be an exact copy of the latest created entry for this specific run. It is otherwise created and filled with this information. This synthetic entry has type `synthetic-latest` and is expected to mirror exactly the columns of the latest created entry for the current run (with the exception of the `id`, `type`, `runpath` columns), during the entire lifetime of the current run.
 
 ### 3.3 Running the job
 
@@ -170,12 +174,13 @@ Once the database entry is made, `run` executes the `run-pi-microvm` script usin
 
 * `--workdir` copied from the `run` table's `workdir` column
 * `--disk-size`, `--ram`, `--read-only`, come from the
-  `runConfig`'s `disk`, `ram`, `roDirs`, but `disk` and `ram` are translated adequately
-* `--model` comes from the `model` column
+  `runConfigs` subattribute's `disk`, `ram`, `roDirs`, but `disk` and `ram` are translated adequately
+* `--model` comes from the `model` attribute in the `runConfigs` subattribute.
 * `--api-key-file` receives the path of the openrouter API key file from
   the TOML config (the key itself is never copied, logged, or printed; only
   the path is handed to the script),
 * the prompt from `prompt` is passed on stdin.
+* `streamSocketFile` is passed as the output for the json stream
 
 The `run-pi-microvm` script is resolved from the `runPiMicroVMPath` config value
 
@@ -194,9 +199,19 @@ If a run's status is set to `terminated`, for both `type` = "pure" and `type` = 
 
 ### 3.4.2 Hook when setting the status to `done`
 
-If a run completes successfully, the contents of the `workdir` temporary directory created specifically for this run is moved to the nix store, the value of `outputPath` in the database is updated with its nix store path and also printed to stdout
+If a run completes successfully, the contents of the `workdir` temporary directory created specifically for this run is moved to the nix store, the value of `outputPath` in the database is updated with its nix store path and also printed to stdout. 
 
-furthermore, if `type` = "impure", then the contents of `workdir` is also copied to `<impure flakeref>/runs/<runpath>`
+Furthermore, if `type` = "impure", then the contents of `workdir` is also copied to `<impure flakeref>/runs/<runpath>`
+
+Finally, `endTime` for the current run is set to the timestamp corresponding to these steps.
+
+### 3.5. The `follows` attribute
+
+If the `runConfigs` subattribute for the current runs as a `follows` attribute, the behaviour of the `run` subcommand is modified as follows:
+
+If a path in the `follows` subattribute designates a run that is currently ongoing, then the `run` subcommand waits until its completion before beginning normal execution. 
+
+This is the only case where behaviour changes. If not path in the `follows` subattribute designates a run that is currently ongoing, then the attribute is ignored.
 
 ## 4. The `list` subcommand
 
@@ -209,7 +224,4 @@ This command lists the entries of the postgresql's URL's  `run` table according 
      i      # only initializing
      it     # only initializing and terminated
 
-The output is a nushell-friendly table: whitespace-aligned columns whose
-first line holds single-word headers (same as the columns in type 3.0.6), with space-free ISO-8601 timestamps and no decoration rows, so that piping it into nushell's `detect columns` yields a proper
-structured table (e.g. `runmanager list -c <config> | detect columns | where
-STATUS == done`).
+The output is a nushell-friendly table: whitespace-aligned columns whose first line holds single-word headers (same as the columns in type 3.0.6), with space-free ISO-8601 timestamps and no decoration rows, so that piping it into nushell's `detect columns` yields a proper structured table.
