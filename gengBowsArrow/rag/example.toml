@@ -1,0 +1,42 @@
+# Example configuration for `rag`.
+# Use with: rag --config example.toml "your question"
+# Paths are resolved relative to this file's directory unless absolute.
+
+# Where the OpenRouter API key is read from. May be overridden with
+# --api-key-file.
+api_key_file = "/run/secrets/keys/openrouter"
+
+[models]
+# Chat model that answers the question from the retrieved excerpts.
+chat = "openai/gpt-4o-mini"
+# Embedding model used to index document chunks and the question.
+embedding = "openai/text-embedding-3-small"
+# Vision model that transcribes/describes images, scanned PDF pages and
+# image-only DjVu documents.
+vision = "openai/gpt-4o-mini"
+
+[documents]
+# Files or directories (searched recursively). Any mix is allowed.
+paths = [
+    "notes",                 # a directory of mixed files
+    "manual.pdf",            # PDF
+    "scan.djvu",             # DjVu
+    "report.docx",           # Word
+    "budget.xlsx",           # Excel
+    "readme.txt",            # plain text
+    "diagram.png",           # image
+]
+
+[agent]
+# How many chunks to retrieve per question.
+top_k = 6
+# Chunking of extracted text.
+chunk_size = 1200
+chunk_overlap = 200
+# System prompt for the answering model.
+system_prompt = "You answer questions using only the provided document excerpts. Cite sources as [file]. If the excerpts do not contain the answer, say so."
+# OpenRouter API base URL.
+api_url = "https://openrouter.ai/api/v1"
+# Connect over IPv4 only. Defaults to true (IPv6 is blackholed on this
+# network); set to false on networks where IPv6 works.
+ipv4_only = true
