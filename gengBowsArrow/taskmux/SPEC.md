@@ -32,7 +32,7 @@ taskmux start <task description>? <tmux session>?
 taskmux done <tmux session>?
 taskmux list <--one-shot>?|<-1>?
 taskmux clear <tmux session>?
-taskmux monitor-pi <tmux pane>?
+taskmux monitor-pi <tmux window>?
 ```
 
 **General rules**
@@ -154,4 +154,5 @@ taskmux monitor-pi <tmux window>?
 
 - `<tmux window>` must an integer designating a tmux window in the current session. If it is omitted, exactly a single a single pi coding agent harness must be running in the current session. If more than one pi coding agent harness is running in the current session and no argument was passed taskmux throws an error and exits. More than more than one pi coding agent harness may be running in the current session if a tmux window was explicitly passed.
 - This subcommand requires that the current session be already tasked and be either `underway` or `done`. 
-- This command monitors the pi process that in the window that was passed as an argument. If that agent's turn is not finished, the session's state is set to `underway`. If that agent's turn is finished and is awaiting user input or otherwise done, the session's state is set to `done`.
+- This command monitors the pi process in the window that was passed as an argument. If that agent's turn is not finished, the session's state is set to `underway`. If that agent's turn is finished and is awaiting user input or otherwise done, the session's state is set to `done`. 
+- This command never exits unless it encounters and error or unless the user cancels it. It keeps monitoring the `pi` process, changing the session's state to `underway` or `done` as specified in the previous paragraph.
