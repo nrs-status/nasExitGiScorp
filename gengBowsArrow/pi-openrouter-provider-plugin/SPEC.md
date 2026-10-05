@@ -52,10 +52,10 @@ type Routing = { mode: "auto" } | { mode: "pin"; provider: string; allowFallback
 The upstream provider name is shown in the footer status area under the status key `openrouter-provider`, rendered as:
 
 ```
-⇢ <Provider> · pin:<slug> · blacklisted:<n>
+⇢ <Provider>[(<precision>, <$x/M in, $y/M out>)] · pin:<slug> · blacklisted:<n>
 ```
 
-`pin:<slug>` appears only while a provider is pinned; `blacklisted:<n>` (with the count of blacklisted providers) appears only when the blacklist is non-empty. While the endpoints list is being fetched for the picker, the status briefly shows `⇢ loading providers…`. When nothing has been detected and no pin or blacklist exists, the status is cleared.
+`pin:<slug>` appears only while a provider is pinned; `blacklisted:<n>` (with the count of blacklisted providers) appears only when the blacklist is non-empty. The parenthesized suffix on the provider name shows the currently serving provider's precision (its quantization at that endpoint, e.g. `fp8`) and its costs per million tokens (prompt and completion side); it appears only when the model's endpoints data (section 6) has been fetched and contains an endpoint matching the detected provider name, slug, or tag. The part never contains the ` · ` separator, which delimits the status line's top-level parts. While the endpoints list is being fetched for the picker, the status briefly shows `⇢ loading providers…`. When nothing has been detected and no pin or blacklist exists, the status is cleared.
 
 Name resolution, in order:
 

@@ -8,7 +8,10 @@
  *   1. Detects OpenRouter usage (provider id `openrouter`, or a model whose
  *      base URL points at an `openrouter.ai` host).
  *   2. Reports which upstream provider actually served the request, in the
- *      footer status area (e.g. `⇢ DeepInfra`). The name is read from the
+ *      footer status area (e.g. `⇢ DeepInfra`), together with that provider's
+ *      costs (per million tokens, when the model's endpoints data is
+ *      available) and its precision (quantization) — e.g.
+ *      `⇢ DeepInfra (fp8, $0.07/M in, $0.15/M out)`. The name is read from the
  *      streamed response itself: the OpenRouter chat-completions SSE chunks
  *      carry a `provider` field, which is captured by tapping the provider
  *      HTTP fetch. As a fallback (and for non-`openrouter` providers whose
@@ -253,7 +256,7 @@ function safeUi(ctx: ExtensionContext, fn: (ui: ExtensionContext["ui"]) => void)
 
 function renderStatus(ctx: ExtensionContext): void {
 	const parts: string[] = [];
-	if (lastDetected) parts.push(lastDetected);
+	if (lastDetected) parts.push(detectedStatusPart());
 	if (routing.mode === "pin" && routing.provider) {
 		parts.push(`pin:${routing.provider}`);
 	} else {
@@ -507,6 +510,11 @@ function onProviderDetected(name: string): void {
 	log(`stream tap detected upstream provider: ${name}`);
 }
 
+/** Re-render the footer once the endpoints (costs/precision) have loaded. */
+function onEndpointsLoaded(ctx: ExtensionContext): void {
+	if (lastDetected) renderStatus(ctx);
+}
+
 /**
  * Read an OpenRouter SSE body in parallel with the provider, pulling the
  * `provider` field out of the chat-completion events (every event carries it).
@@ -607,6 +615,9 @@ async function getEndpoints(ctx: ExtensionContext): Promise<EndpointInfo[]> {
 	const endpoints = parseEndpoints(json);
 	learnKnownSlugs(model.id, endpoints);
 	endpointsCache = { modelId: model.id, fetchedAt: now, endpoints };
+	// Costs and precision for the serving provider may now be known; refresh
+	// the footer status if it is already showing a detected provider.
+	onEndpointsLoaded(ctx);
 	return endpoints;
 }
 
@@ -671,6 +682,44 @@ function priceTag(endpoint: EndpointInfo): string {
 	if (endpoint.promptPrice === undefined && endpoint.completionPrice === undefined) return "";
 	const uptime = endpoint.uptime !== undefined ? `, up ${endpoint.uptime.toFixed(1)}%` : "";
 	return ` — $${fmtPrice(endpoint.promptPrice)}/M in, $${fmtPrice(endpoint.completionPrice)}/M out${uptime}`;
+}
+
+/**
+ * The endpoints record of the currently serving upstream provider
+ * (lastDetected), matched case-insensitively against the display name,
+ * routing slug, and raw endpoint tag of the active model's endpoints.
+ * Undefined when the endpoints data has not been fetched (yet) or the
+ * detected name matches none of the model's endpoints.
+ */
+function detectedEndpoint(): EndpointInfo | undefined {
+	if (!lastDetected || !endpointsCache) return undefined;
+	const key = lastDetected.trim().toLowerCase();
+	return endpointsCache.endpoints.find(
+		(endpoint) =>
+			endpoint.name.toLowerCase() === key || endpoint.slug === key || endpoint.tag.toLowerCase() === key,
+	);
+}
+
+/**
+ * Footer status part for the serving upstream provider: the name, enriched —
+ * when the model's endpoints data is available and matches the detected name —
+ * with the provider's precision (quantization) and per-million-token costs,
+ * e.g. `DeepInfra (fp8, $0.07/M in, $0.15/M out)`. The parentheses-free name
+ * is shown when the endpoint (and thus costs/precision) is unknown. The part
+ * deliberately contains no " · " separator, which the status line uses to
+ * delimit its top-level parts.
+ */
+function detectedStatusPart(): string {
+	if (!lastDetected) return "";
+	const endpoint = detectedEndpoint();
+	if (!endpoint) return lastDetected;
+	const precision = precisionTag(endpoint).trim().replace(/^\[|\]$/g, "");
+	const costs =
+		endpoint.promptPrice !== undefined || endpoint.completionPrice !== undefined
+			? `$${fmtPrice(endpoint.promptPrice)}/M in, $${fmtPrice(endpoint.completionPrice)}/M out`
+			: "";
+	const suffix = [precision, costs].filter(Boolean).join(", ");
+	return suffix ? `${lastDetected} (${suffix})` : lastDetected;
 }
 
 function setBlacklist(next: string[], ctx: ExtensionContext, changed?: string, added?: boolean): void {
