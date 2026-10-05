@@ -50,6 +50,8 @@
  *   /openrouter block <slug>         blacklist <slug> from automatic selection
  *   /openrouter unblock <slug>       remove <slug> from the blacklist
  *   /openrouter blocked              show the blacklist
+ *   /openrouter config               show the config-file routing for the
+ *                                    current model (preferred + blacklisted)
  *
  * Debugging: set PI_OPENROUTER_PROVIDER_LOG=/path/to/log to append a trace.
  */
@@ -707,6 +709,43 @@ function describeRouting(modelId: string | undefined): string {
 	return bits.join(", ");
 }
 
+/**
+ * The `/openrouter config` status view: the routing the configuration file
+ * declares for the *current* model — the applicable scope, the preferred
+ * provider order, and the blacklisted providers. Session state (the pin and
+ * the interactive blacklist) is deliberately out of scope here; it is
+ * reported by `/openrouter status` and `/openrouter blocked`.
+ */
+function showConfigStatus(ctx: ExtensionCommandContext): void {
+	if (fileConfigError) {
+		ctx.ui.notify(`Config file invalid, routing ignored:\n${fileConfigError}`, "warning");
+		return;
+	}
+	if (!fileConfig) {
+		ctx.ui.notify(
+			"No configuration file: PI_OPENROUTER_EXTENSION_CONFIG_FILE is unset.",
+			"info",
+		);
+		return;
+	}
+	const resolved = resolveConfig(ctx.model?.id);
+	const header = `Config: ${fileConfig.path}`;
+	if (resolved.scope === "none" || !resolved.config) {
+		ctx.ui.notify(`${header}\nNo routing table applies to ${ctx.model?.id ?? "(no model)"}.`, "info");
+		return;
+	}
+	const preferred =
+		resolved.config.preferred.length > 0 ? resolved.config.preferred.join(", ") : "(none)";
+	const blacklisted =
+		resolved.config.blacklist.length > 0 ? resolved.config.blacklist.join(", ") : "(none)";
+	ctx.ui.notify(
+		`${header} (${resolved.scope} scope for ${ctx.model?.id})\n` +
+			`Preferred providers: ${preferred}\n` +
+			`Blacklisted providers: ${blacklisted}`,
+		"info",
+	);
+}
+
 async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Promise<void> {
 	if (!isOpenRouterModel(ctx.model)) {
 		ctx.ui.notify("The active model is not routed through OpenRouter.", "warning");
@@ -779,6 +818,10 @@ async function handleOpenRouter(args: string, ctx: ExtensionCommandContext): Pro
 					: "No blacklisted providers.",
 				"info",
 			);
+			return;
+		case "config":
+		case "routing":
+			showConfigStatus(ctx);
 			return;
 		case "pin":
 			if (!rest[0]) {

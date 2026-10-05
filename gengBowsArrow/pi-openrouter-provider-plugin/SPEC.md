@@ -152,6 +152,7 @@ The extension registers a single command `/openrouter` (alias `/or`) which takes
 | `/openrouter block <slug>…` (alias: `blacklist`) | Blacklist `<slug>`s from automatic selection. |
 | `/openrouter unblock <slug>…` (alias: `unblacklist`) | Remove `<slug>`s from the blacklist. |
 | `/openrouter blocked` (alias: `blacklisted`) | Show the blacklist. |
+| `/openrouter config` (alias: `routing`) | Show the configuration-file routing for the active model: file path, applicable scope, preferred provider order, and blacklisted providers (section 5.1). |
 
 Missing arguments to `pin`/`prefer`/`block`/`unblock` produce a usage warning. `unblock` of a slug that is not blacklisted produces a warning and changes nothing. Blacklisting or un-blacklisting reports the change via a notification. `status` reports, e.g., `pinned to "<slug>" (no fallbacks)` or `automatic (OpenRouter decides), blacklisted: a, b`, followed by the last provider seen (`(unknown)` if none).
 

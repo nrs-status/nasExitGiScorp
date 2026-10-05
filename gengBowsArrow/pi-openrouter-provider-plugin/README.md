@@ -40,6 +40,10 @@ one).
 | `/openrouter pin <slug>` | Force `<slug>`, no fallbacks. |
 | `/openrouter prefer <slug>` | Try `<slug>` first, allow fallbacks. |
 | `/openrouter <slug>` | Shorthand for `pin <slug>`. |
+| `/openrouter block <slug>` | Blacklist `<slug>` from automatic selection. |
+| `/openrouter unblock <slug>` | Remove `<slug>` from the blacklist. |
+| `/openrouter blocked` | Show the blacklist. |
+| `/openrouter config` (alias: `routing`) | Show the routing the configuration file declares for the current model: the applicable scope (`model` or `global`), the preferred provider order, and the blacklisted providers. |
 
 The status area shows `⇢ <Provider>` (and ` · pin:<slug>` when pinned, plus
 ` · blacklisted:<n>` when providers are blacklisted) while an OpenRouter model
@@ -57,8 +61,12 @@ blacklisted item un-blacklists it. Plain enter still pins the selected
 provider. The same blacklist can be managed textually via `/openrouter
 block|unblock|blocked`.
 
-The same blacklist can be managed textually via `/openrouter
-block|unblock|blocked`.
+`/openrouter config` reports what the configuration file (see below) applies
+to the active model: the file path and the scope that won (`model`-specific
+table or `[global]`), followed by the preferred providers (in the order they
+are tried) and the blacklisted providers. It reflects the configuration file
+only — session state such as an interactive pin or providers blocked via the
+picker is reported by `/openrouter status` and `/openrouter blocked` instead.
 
 ## Configuration file
 

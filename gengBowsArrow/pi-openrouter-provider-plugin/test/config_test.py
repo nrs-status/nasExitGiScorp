@@ -223,6 +223,57 @@ preferred = ["fake-never-applied"]
     finally:
         rpc8.close()
 
+    # ---- Scenario 9: /openrouter config reports the config-file routing --
+    # The command must show the preferred and blacklisted providers that the
+    # configuration file applies to the *current* model, in all four cases:
+    # model scope, global scope, no applicable table, and no/invalid file.
+    # The file is only (re-)loaded on session_start/model_select, so each
+    # variant runs in its own pi process.
+
+    def run_config_command(config_text: str | None, config_path: str | None, command: str) -> tuple[str, str]:
+        """Start pi, send `command`, return (notify message, '')."""
+        if config_text is not None:
+            with open(config_path, "w") as handle:
+                handle.write(config_text)
+        rpc = ConfigRpc(f"/tmp/pi-openrouter-config-test-cfg-{command.replace(' ', '-').replace('/', '')}.log", config_path)
+        try:
+            rpc.send({"type": "prompt", "message": command})
+            notify = rpc.wait_for(
+                lambda e: e.get("method") == "notify",
+                30,
+                f"config notification for {command!r}",
+            )
+            return notify.get("message") or "", notify.get("notifyType") or ""
+        finally:
+            rpc.close()
+
+    message = run_config_command(config_1, CONFIG_PATH, "/openrouter config")[0]
+    check(f"(model scope for {MODEL_ID})" in message, f"config command reports model scope: {message!r}")
+    check(f"Preferred providers: {s0}, {s1}" in message, f"config command reports the preferred order: {message!r}")
+    check("Blacklisted providers: fake-model-blocked" in message, f"config command reports the blacklist: {message!r}")
+    check("fake-global" not in message, "config command ignores the global table when a model table exists")
+
+    # Global scope: no model table for the active model (via the /or alias).
+    message = run_config_command(config_2, CONFIG_PATH, "/or routing")[0]
+    check("(global scope" in message, f"alias via /or routing reports global scope: {message!r}")
+    check(f"Preferred providers: {s1}, {s2}" in message, f"global preferred order reported: {message!r}")
+    check("Blacklisted providers: fake-global-blocked" in message, f"global blacklist reported: {message!r}")
+
+    # No table applies to the active model.
+    message = run_config_command(
+        '[models."some/other-model"]\npreferred = ["fake-never"]\n', CONFIG_PATH, "/openrouter config"
+    )[0]
+    check("No routing table applies" in message, f"no applicable table reported: {message!r}")
+
+    # No configuration file at all.
+    message = run_config_command(None, None, "/openrouter config")[0]
+    check("No configuration file" in message, f"unset file reported: {message!r}")
+
+    # Invalid file: reported as a warning, with the path and the reason.
+    msg, kind = run_config_command("[global\npreferred = ???\n", CONFIG_PATH, "/openrouter config")
+    check("invalid" in msg and CONFIG_PATH in msg, f"invalid file reported with its path: {msg!r}")
+    check(kind == "warning", f"invalid file reported as a warning: {kind!r}")
+
     print()
     if failures:
         print(f"{len(failures)} check(s) failed")
