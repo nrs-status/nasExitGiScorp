@@ -28,13 +28,19 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXTENSION = os.path.normpath(os.path.join(HERE, "..", "openrouter-provider.ts"))
 KEY_FILE = "/run/secrets/keys/openrouter"
+# The model the tests run against; the RPC harness pins it because pi's
+# default model may drift, and the tests' expectations are model-specific.
+MODEL_ID = "z-ai/glm-5.3-flash"
 
 
 class PiRpc:
     def __init__(self, log_path: str):
         self.log_path = log_path
         self.proc = subprocess.Popen(
-            ["pi", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--no-session"],
+            # Pin the model the tests expect: the harness's default model
+            # may drift, and MODEL_ID / config table keys must match it.
+            ["pi", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--no-session",
+             "--model", "openrouter/" + MODEL_ID],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -243,7 +249,7 @@ def main() -> int:
         if not condition:
             failures.append(message)
 
-    model_id = "z-ai/glm-5.3-flash"
+    model_id = MODEL_ID
     candidates = fetch_model_endpoints(model_id)[:4]
     check(len(candidates) > 1, f"discovered {len(candidates)} candidate providers for {model_id}")
 

@@ -57,7 +57,9 @@ class ConfigRpc(PiRpc):
             env.pop("PI_OPENROUTER_EXTENSION_CONFIG_FILE", None)
         self.log_path = log_path
         self.proc = subprocess.Popen(
-            ["pi", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--no-session"],
+            # Pin the model the tests expect (see rpc_test.PiRpc).
+            ["pi", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--no-session",
+             "--model", "openrouter/" + MODEL_ID],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

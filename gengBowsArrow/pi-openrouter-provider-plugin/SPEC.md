@@ -109,12 +109,16 @@ The file has two kinds of routing tables:
 - a single `[global]` table whose routing applies to every OpenRouter model, and
 - per-model tables under `[models]`, keyed by the exact model id (quote keys containing `.` or `/`, e.g. `[models."z-ai/glm-5.3-flash"]`).
 
-Both the global table and each per-model table may set the same two keys:
+Both the global table and each per-model table may set the same keys:
 
-| Key         | Type                  | Meaning                                                                       |
-|-------------|-----------------------|-------------------------------------------------------------------------------|
-| `preferred` | array of slug strings | Providers to be tried sequentially, in list order (injected as `provider.order`) |
-| `blacklist` | array of slug strings | Providers excluded from automatic selection (injected as `provider.ignore`)   |
+| Key                   | Type                  | Meaning                                                                       |
+|-----------------------|-----------------------|-------------------------------------------------------------------------------|
+| `preferred`           | array of slug strings | Providers to be tried sequentially, in list order (injected as `provider.order`) |
+| `blacklist`           | array of slug strings | Providers excluded from automatic selection (injected as `provider.ignore`)   |
+| `allowlist`           | array of slug strings | Providers allowed exclusively; nothing else may serve (injected as `provider.only`, with fallbacks still allowed among them) |
+| `precision_allowlist` | array of quantization strings | Precisions the request may be served with, injected verbatim as `provider.quantizations` |
+| `precision_blacklist` | array of quantization strings | Precisions excluded from serving; injected as their **complement** within the known quantization set (`int4`, `int8`, `fp4`, `fp6`, `fp8`, `fp16`, `bf16`, `fp32`, `unknown`) — OpenRouter's `provider.quantizations` is a positive filter, so a negative one is implemented by inversion |
+| `precision_preferred` | array of quantization strings | Precisions preferred when available (soft). The cheapest endpoint serving the model at each preferred precision is looked up in the model's endpoints data and injected as a quantization-qualified endpoint tag (e.g. `deepinfra/fp8`) at the front of `provider.order`; the configured `preferred` slugs remain in place behind it. When the endpoints data cannot be fetched (or a preferred precision serves no endpoint), that entry is skipped. |
 
 Example:
 
@@ -126,15 +130,23 @@ blacklist = ["chutes"]
 [models."z-ai/glm-5.3-flash"]
 preferred = ["moonshotai"]
 blacklist = []
+
+[models."qwen/qwen3-coder-next"]
+allowlist = ["deepinfra", "novita"]     # nothing else may serve this model
+precision_allowlist = ["fp8"]            # hard precision filter
+precision_preferred = ["fp8", "bf16"]    # soft precision preference
 ```
 
 Semantics and edge cases:
 
 - **Precedence.** A model-specific table has higher precedence than the global table. If a `[models."<id>"]` table exists for the active model id (exact, case-sensitive match), each key it sets replaces the global value for that model, while keys it omits are *inherited* from the `[global]` table; an explicit empty list (`preferred = []` or `blacklist = []`) disables the global list for that key.
+- **Combination.** The keys are independent and combined in one `provider` object: an `allowlist` restricts the candidate set (`only`) while `preferred` orders it and `blacklist` prunes it (`ignore`); a precision filter (`quantizations`) applies on top. An `allowlist` therefore does not make `blacklist` redundant (the latter removes entries from within the allowed set).
+- **Precision allowlist vs. blacklist.** If both `precision_allowlist` and `precision_blacklist` are set in the effective configuration, the allowlist wins and the blacklist is ignored (a decision is logged). Precision values are trimmed, lowercased and deduplicated like slugs; OpenRouter ignores values it does not know.
+- **Empty resolution.** If the effective configuration resolves to nothing (e.g. a lone `precision_preferred` entry no endpoint serves), the request payload is left untouched.
 - **Interaction with the session.** An interactive pin (`/openrouter pin`/`prefer`, or the picker) overrides configuration-file routing; `/openrouter auto` returns to it. In automatic mode the effective ignore list is the union of the applicable configuration blacklist and the session blacklist, while the preferred order comes only from the configuration file. Configuration-driven routing always sends `allow_fallbacks: true`. Configuration blacklists are not editable in the picker: the picker and `block`/`unblock` manage only the session blacklist.
-- **Invalid or missing file.** A missing, unreadable, or syntactically invalid file — or a file whose `preferred`/`blacklist` values are not arrays of non-empty strings — is rejected as a whole: the error is logged and the extension behaves as if no configuration file were set; a configuration problem can never break the extension or the request. Configured slugs are trimmed, lowercased, and deduplicated. Unknown keys inside the routing tables are ignored. The file must be standard TOML, parsed with the extension's TOML runtime dependency; anything the parser rejects (including constructs outside TOML's standard syntax) makes the file invalid.
+- **Invalid or missing file.** A missing, unreadable, or syntactically invalid file — or a file whose `preferred`/`blacklist`/`allowlist`/`precision_*` values are not arrays of non-empty strings — is rejected as a whole: the error is logged and the extension behaves as if no configuration file were set; a configuration problem can never break the extension or the request. Configured slugs and precision values are trimmed, lowercased, and deduplicated. Unknown keys inside the routing tables are ignored. The file must be standard TOML, parsed with the extension's TOML runtime dependency; anything the parser rejects (including constructs outside TOML's standard syntax) makes the file invalid.
 - **Reference example.** A commented example configuration ships with the package (`config.example.toml`). It is purely for reference: nothing in the extension reads it, and it is never loaded — the file that is used is only ever the one `PI_OPENROUTER_EXTENSION_CONFIG_FILE` points at.
-- **Observability.** While a configuration preferred list applies in automatic mode, the footer status shows `order:<n>` (in addition to `blacklisted:<n>`, which counts the effective ignore list, and `pin:<slug>` while pinned, which suppresses both). `/openrouter status` reports the configuration file path and the scope that applies (`model` or `global`), or the parse error that caused the file to be rejected.
+- **Observability.** While a configuration preferred list applies in automatic mode, the footer status shows `order:<n>` (in addition to `blacklisted:<n>`, which counts the effective ignore list, `only:<n>` for a configured allowlist, `quants:<n>` for the effective precision filter, and `pin:<slug>` while pinned, which suppresses all of these). `/openrouter status` reports the configuration file path and the scope that applies (`model` or `global`), or the parse error that caused the file to be rejected. `/openrouter config` additionally reports the allowlisted providers and the effective precision filters.
 
 ## 6. Commands
 

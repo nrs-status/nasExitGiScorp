@@ -38,10 +38,12 @@
  *      from the active model's list may well serve other models.
  *   5. Reads an optional TOML configuration file (path taken from the
  *      PI_OPENROUTER_EXTENSION_CONFIG_FILE environment variable) that
- *      declaratively prefers and/or blacklists providers, globally and/or
- *      per model. A per-model table overrides the keys it sets; keys it
- *      omits are inherited from the [global] table. See SPEC.md 5.1. TOML parsing and SSE framing are
- *      provided by runtime dependencies (smol-toml, eventsource-parser).
+ *      declaratively prefers, blacklists and/or allowlists providers, and
+ *      filters them by precision (quantization), globally and/or per model.
+ *      A per-model table overrides the keys it sets; keys it omits are
+ *      inherited from the [global] table. See SPEC.md 5.1. TOML parsing and
+ *      SSE framing are provided by runtime dependencies (smol-toml,
+ *      eventsource-parser).
  *
  * Usage:
  *   PI_OPENROUTER_EXTENSION_CONFIG_FILE=/etc/openrouter-routing.toml \
@@ -62,7 +64,8 @@
  *   /openrouter unblock <slug>       remove <slug> from the blacklist
  *   /openrouter blocked              show the blacklist
  *   /openrouter config               show the config-file routing for the
- *                                    current model (preferred + blacklisted)
+ *                                    current model (preferred, blacklisted,
+ *                                    allowlisted, precision filters)
  *
  * Debugging: set PI_OPENROUTER_PROVIDER_LOG=/path/to/log to append a trace.
  */
@@ -221,6 +224,7 @@ function warnConfiguredSlugs(ctx: ExtensionContext): void {
 	if (resolved.config) {
 		warnUnknownSlugs(ctx, resolved.config.preferred ?? [], `${resolved.scope} config preferred`);
 		warnUnknownSlugs(ctx, resolved.config.blacklist ?? [], `${resolved.scope} config blacklist`);
+		warnUnknownSlugs(ctx, resolved.config.allowlist ?? [], `${resolved.scope} config allowlist`);
 	}
 	warnUnknownSlugs(ctx, blacklist, "session blacklist");
 }
@@ -260,12 +264,16 @@ function renderStatus(ctx: ExtensionContext): void {
 	if (routing.mode === "pin" && routing.provider) {
 		parts.push(`pin:${routing.provider}`);
 	} else {
-		// Automatic mode: report the effective (config ∪ session) exclusions and
-		// a declarative preferred order from the configuration file, if any.
+		// Automatic mode: report the effective (config ∪ session) exclusions, a
+		// declarative preferred order and allowlist from the configuration file,
+		// if any, and the effective precision (quantization) filter.
 		const ignore = effectiveIgnore(ctx.model?.id);
 		if (ignore.length > 0) parts.push(`blacklisted:${ignore.length}`);
-		const order = resolveConfig(ctx.model?.id).config?.preferred ?? [];
-		if (order.length > 0) parts.push(`order:${order.length}`);
+		const resolved = resolveConfig(ctx.model?.id);
+		if ((resolved.config?.preferred ?? []).length > 0) parts.push(`order:${resolved.config!.preferred!.length}`);
+		if ((resolved.config?.allowlist ?? []).length > 0) parts.push(`only:${resolved.config!.allowlist!.length}`);
+		const quants = effectiveQuantizations(ctx.model?.id);
+		if (quants) parts.push(`quants:${quants.length}`);
 	}
 	const text = parts.length > 0 ? `⇢ ${parts.join(" · ")}` : undefined;
 	safeUi(ctx, (ui) => ui.setStatus(STATUS_KEY, text));
@@ -307,10 +315,19 @@ async function ensureKey(ctx: ExtensionContext): Promise<string | undefined> {
 //
 // A TOML file that declaratively routes requests: a `[global]` table whose
 // settings apply to every OpenRouter model, and per-model tables under
-// `[models."<model-id>"]`. Both kinds of table may set two keys:
+// `[models."<model-id>"]`. Both kinds of table may set these keys:
 //
-//   preferred = ["slug-a", "slug-b"]   → provider.order (tried in list order)
-//   blacklist = ["slug-c"]             → provider.ignore
+//   preferred           = [...]  → provider.order (tried in list order)
+//   blacklist           = [...]  → provider.ignore
+//   allowlist           = [...]  → provider.only (ONLY these providers may
+//                                   serve the request)
+//   precision_allowlist = [...]  → provider.quantizations (only these
+//                                   precisions/quantizations)
+//   precision_blacklist = [...]  → provider.quantizations (the complement
+//                                   within the known quantization set)
+//   precision_preferred = [...]  → quantization-qualified endpoint tags
+//                                   (e.g. "deepinfra/fp8") prepended to
+//                                   provider.order (soft preference)
 //
 // A model-specific table overrides the global one per key: each key it sets
 // replaces the global value for that model, while keys it omits are
@@ -324,7 +341,33 @@ interface ProviderRoutingConfig {
 	preferred?: string[];
 	/** Providers excluded from automatic selection (provider.ignore). */
 	blacklist?: string[];
+	/** Providers allowed exclusively; nothing else may serve (provider.only). */
+	allowlist?: string[];
+	/** Precisions (quantizations) the request may be served with (provider.quantizations). */
+	precisionAllowlist?: string[];
+	/** Precisions excluded from serving (injected as the complement, provider.quantizations). */
+	precisionBlacklist?: string[];
+	/** Precisions preferred when available (soft: prepended to provider.order as quantization-qualified tags). */
+	precisionPreferred?: string[];
 }
+
+/**
+ * The quantization (precision) labels OpenRouter reports on its endpoints and
+ * accepts in the `provider.quantizations` routing filter. A precision
+ * blacklist is injected as the complement of the blacklisted labels within
+ * this set (OpenRouter has no negative quantization filter).
+ */
+const KNOWN_QUANTIZATIONS = [
+	"int4",
+	"int8",
+	"fp4",
+	"fp6",
+	"fp8",
+	"fp16",
+	"bf16",
+	"fp32",
+	"unknown",
+] as const;
 
 interface FileConfig {
 	/** Absolute or relative path the configuration was loaded from. */
@@ -340,9 +383,9 @@ let fileConfigError: string | undefined;
 
 // TOML parsing is provided by the smol-toml runtime dependency (see package.json).
 
-/** Trim, lowercase and deduplicate a configured provider-slug list. */
+/** Trim, lowercase and deduplicate a configured string list. */
 function sanitizeConfigSlugs(value: unknown, what: string): string[] {
-	if (!Array.isArray(value)) throw new Error(`${what} must be an array of provider slugs`);
+	if (!Array.isArray(value)) throw new Error(`${what} must be an array of strings`);
 	const slugs: string[] = [];
 	for (const item of value) {
 		if (typeof item !== "string" || !item.trim()) throw new Error(`${what} must contain only non-empty strings`);
@@ -358,6 +401,13 @@ function extractRoutingTable(raw: unknown, what: string): ProviderRoutingConfig 
 	const config: ProviderRoutingConfig = {};
 	if (table.preferred !== undefined) config.preferred = sanitizeConfigSlugs(table.preferred, `${what}.preferred`);
 	if (table.blacklist !== undefined) config.blacklist = sanitizeConfigSlugs(table.blacklist, `${what}.blacklist`);
+	if (table.allowlist !== undefined) config.allowlist = sanitizeConfigSlugs(table.allowlist, `${what}.allowlist`);
+	if (table.precision_allowlist !== undefined)
+		config.precisionAllowlist = sanitizeConfigSlugs(table.precision_allowlist, `${what}.precision_allowlist`);
+	if (table.precision_blacklist !== undefined)
+		config.precisionBlacklist = sanitizeConfigSlugs(table.precision_blacklist, `${what}.precision_blacklist`);
+	if (table.precision_preferred !== undefined)
+		config.precisionPreferred = sanitizeConfigSlugs(table.precision_preferred, `${what}.precision_preferred`);
 	return config;
 }
 
@@ -411,13 +461,24 @@ function resolveConfig(modelId: string | undefined): { scope: ConfigScope; confi
 			config: {
 				preferred: modelSpecific.preferred ?? fileConfig.global?.preferred ?? [],
 				blacklist: modelSpecific.blacklist ?? fileConfig.global?.blacklist ?? [],
+				allowlist: modelSpecific.allowlist ?? fileConfig.global?.allowlist ?? [],
+				precisionAllowlist: modelSpecific.precisionAllowlist ?? fileConfig.global?.precisionAllowlist ?? [],
+				precisionBlacklist: modelSpecific.precisionBlacklist ?? fileConfig.global?.precisionBlacklist ?? [],
+				precisionPreferred: modelSpecific.precisionPreferred ?? fileConfig.global?.precisionPreferred ?? [],
 			},
 		};
 	}
 	if (fileConfig.global) {
 		return {
 			scope: "global",
-			config: { preferred: fileConfig.global.preferred ?? [], blacklist: fileConfig.global.blacklist ?? [] },
+			config: {
+				preferred: fileConfig.global.preferred ?? [],
+				blacklist: fileConfig.global.blacklist ?? [],
+				allowlist: fileConfig.global.allowlist ?? [],
+				precisionAllowlist: fileConfig.global.precisionAllowlist ?? [],
+				precisionBlacklist: fileConfig.global.precisionBlacklist ?? [],
+				precisionPreferred: fileConfig.global.precisionPreferred ?? [],
+			},
 		};
 	}
 	return { scope: "none" };
@@ -431,6 +492,72 @@ function resolveConfig(modelId: string | undefined): { scope: ConfigScope; confi
 function effectiveIgnore(modelId: string | undefined): string[] {
 	const configured = resolveConfig(modelId).config?.blacklist ?? [];
 	return [...new Set([...configured, ...blacklist])];
+}
+
+/**
+ * The effective precision (quantization) filter for automatic mode, or
+ * undefined when no precision filter is configured. A precision allowlist is
+ * injected verbatim; a precision blacklist is injected as its complement
+ * within the known quantization set (OpenRouter's `provider.quantizations`
+ * is a positive filter — there is no way to say "everything but fp4"). When
+ * both are configured the allowlist wins (a blacklist would be redundant).
+ */
+function effectiveQuantizations(modelId: string | undefined): string[] | undefined {
+	const config = resolveConfig(modelId).config;
+	if (!config) return undefined;
+	if (config.precisionAllowlist && config.precisionAllowlist.length > 0) {
+		if (config.precisionBlacklist && config.precisionBlacklist.length > 0) {
+			log(
+				`precision_allowlist and precision_blacklist are both configured; the allowlist wins ` +
+					`(${JSON.stringify(config.precisionBlacklist)} ignored)`,
+			);
+		}
+		return config.precisionAllowlist;
+	}
+	if (config.precisionBlacklist && config.precisionBlacklist.length > 0) {
+		const blocked = new Set(config.precisionBlacklist);
+		return KNOWN_QUANTIZATIONS.filter((quantization) => !blocked.has(quantization));
+	}
+	return undefined;
+}
+
+/**
+ * The `provider.order` entries for a configured precision_preferred list: the
+ * quantization-qualified endpoint tag (e.g. "deepinfra/fp8") of the cheapest
+ * endpoint serving the model at each preferred precision, in the order the
+ * precisions are listed. This is a soft preference (OpenRouter may fall back
+ * to other endpoints); it needs the model's endpoints data, so when that
+ * cannot be fetched the preference is skipped (logged). Unknown precisions
+ * (not served for this model) are skipped.
+ */
+async function precisionPreferredOrderTags(
+	ctx: ExtensionContext,
+	preferred: string[],
+): Promise<string[]> {
+	if (preferred.length === 0) return [];
+	let endpoints: EndpointInfo[] | undefined;
+	try {
+		endpoints = await Promise.race([getEndpoints(ctx), sleep(8000).then(() => undefined)]);
+	} catch (error) {
+		log(`precision_preferred: endpoints lookup failed (${String(error)}); preference skipped`);
+	}
+	if (!endpoints || endpoints.length === 0) {
+		log("precision_preferred: no endpoints data available; preference skipped");
+		return [];
+	}
+	const tags: string[] = [];
+	for (const precision of preferred) {
+		// Endpoints are sorted by prompt price, so the first match is the
+		// cheapest endpoint at that precision. Endpoints without a reported
+		// quantization count as "unknown".
+		const endpoint = endpoints.find((e) => (e.quantization ?? "unknown") === precision);
+		if (!endpoint) {
+			log(`precision_preferred: no endpoint serves ${ctx.model?.id} at "${precision}"; skipped`);
+			continue;
+		}
+		if (!tags.includes(endpoint.tag)) tags.push(endpoint.tag);
+	}
+	return tags;
 }
 
 let slugAliasPrefetch: Promise<void> | undefined;
@@ -898,9 +1025,21 @@ function describeRouting(modelId: string | undefined): string {
 	}
 	const bits: string[] = ["automatic (OpenRouter decides)"];
 	const resolved = resolveConfig(modelId);
-	if (resolved.config && (resolved.config.preferred.length > 0 || resolved.config.blacklist.length > 0)) {
-		bits.push(`config ${resolved.scope} scope`);
+	if (resolved.config) {
+		if (resolved.config.preferred.length > 0 || resolved.config.blacklist.length > 0) {
+			bits.push(`config ${resolved.scope} scope`);
+		}
 		if (resolved.config.preferred.length > 0) bits.push(`preferred: ${resolved.config.preferred.join(", ")}`);
+		if (resolved.config.allowlist.length > 0) bits.push(`allowlisted (only): ${resolved.config.allowlist.join(", ")}`);
+		const allowed = resolved.config.precisionAllowlist;
+		if (allowed && allowed.length > 0) bits.push(`precisions allowed: ${allowed.join(", ")}`);
+		const blocked = resolved.config.precisionBlacklist;
+		if (blocked && blocked.length > 0 && (!allowed || allowed.length === 0)) {
+			bits.push(`precisions blocked: ${blocked.join(", ")}`);
+		}
+		if (resolved.config.precisionPreferred && resolved.config.precisionPreferred.length > 0) {
+			bits.push(`precisions preferred: ${resolved.config.precisionPreferred.join(", ")}`);
+		}
 	}
 	const ignore = effectiveIgnore(modelId);
 	if (ignore.length > 0) bits.push(`blacklisted: ${ignore.join(", ")}`);
@@ -937,10 +1076,25 @@ function showConfigStatus(ctx: ExtensionCommandContext): void {
 		resolved.config.preferred.length > 0 ? resolved.config.preferred.join(", ") : "(none)";
 	const blacklisted =
 		resolved.config.blacklist.length > 0 ? resolved.config.blacklist.join(", ") : "(none)";
+	const allowlisted =
+		resolved.config.allowlist.length > 0 ? resolved.config.allowlist.join(", ") : "(none)";
+	const precisionLines: string[] = [];
+	if (resolved.config.precisionAllowlist.length > 0) {
+		precisionLines.push(`Precisions allowed (quantizations filter): ${resolved.config.precisionAllowlist.join(", ")}`);
+	} else if (resolved.config.precisionBlacklist.length > 0) {
+		precisionLines.push(
+			`Precisions blocked (inverted into a quantizations filter): ${resolved.config.precisionBlacklist.join(", ")}`,
+		);
+	}
+	if (resolved.config.precisionPreferred.length > 0) {
+		precisionLines.push(`Precisions preferred (ordered first): ${resolved.config.precisionPreferred.join(", ")}`);
+	}
 	ctx.ui.notify(
 		`${header} (${resolved.scope} scope for ${ctx.model?.id})\n` +
 			`Preferred providers: ${preferred}\n` +
-			`Blacklisted providers: ${blacklisted}`,
+			`Blacklisted providers: ${blacklisted}\n` +
+			`Allowlisted providers (only these may serve): ${allowlisted}` +
+			(precisionLines.length > 0 ? `\n${precisionLines.join("\n")}` : ""),
 		"info",
 	);
 }
@@ -1121,25 +1275,58 @@ export default function (pi: ExtensionAPI): void {
 			return { ...payload, provider };
 		}
 		// Automatic (auto) selection mode: apply the declarative routing from the
-		// configuration file (model-specific scope wins over the global one) and
+		// configuration file (model-specific scope wins over the global one),
 		// keep both configured and interactively blacklisted providers away from
-		// OpenRouter's choice via `provider.ignore`.
+		// OpenRouter's choice via `provider.ignore`, restrict the candidate set
+		// to a configured allowlist via `provider.only`, and filter by precision
+		// via `provider.quantizations` (precision allowlist, or the complement of
+		// a precision blacklist). A configured precision_preferred list prepends
+		// quantization-qualified endpoint tags to the preferred order.
 		const resolved = resolveConfig(ctx.model?.id);
 		const order = resolved.config?.preferred ?? [];
+		const allowlist = resolved.config?.allowlist ?? [];
 		const ignore = effectiveIgnore(ctx.model?.id);
-		if (order.length === 0 && ignore.length === 0) return;
+		const quantizations = effectiveQuantizations(ctx.model?.id);
+		const precisionPreferred = resolved.config?.precisionPreferred ?? [];
+		if (
+			order.length === 0 &&
+			allowlist.length === 0 &&
+			ignore.length === 0 &&
+			!quantizations &&
+			precisionPreferred.length === 0
+		)
+			return;
 		// Slug validation needs the routing slugs from the endpoints API; a
 		// request that races the prefetch waits for it briefly (see above).
 		await ensureSlugAliases(ctx);
 		if (order.length > 0) warnUnknownSlugs(ctx, order, `${resolved.scope} config preferred`);
+		if (allowlist.length > 0) warnUnknownSlugs(ctx, allowlist, `${resolved.scope} config allowlist`);
 		warnUnknownSlugs(ctx, ignore, "effective blacklist");
+		// A soft precision preference resolves to concrete endpoint tags (e.g.
+		// "deepinfra/fp8") from the model's endpoints data; it is ordered before
+		// the configured preferred slugs but never removes them.
+		const precisionTags = await precisionPreferredOrderTags(ctx, precisionPreferred);
+		const orderEntries = [...precisionTags, ...order.filter((slug) => !precisionTags.includes(slug))];
+		if (
+			orderEntries.length === 0 &&
+			allowlist.length === 0 &&
+			ignore.length === 0 &&
+			!quantizations
+		) {
+			// e.g. a precision_preferred entry no endpoint serves, with nothing
+			// else configured: there is nothing to apply, leave the payload alone.
+			log("config routing resolved to nothing; payload untouched");
+			return;
+		}
 		const provider: Record<string, unknown> = {
 			...existing,
 			allow_fallbacks: true,
 		};
 		delete provider.order;
 		if (ignore.length > 0) provider.ignore = ignore;
-		if (order.length > 0) provider.order = order;
+		if (allowlist.length > 0) provider.only = allowlist;
+		if (quantizations) provider.quantizations = quantizations;
+		if (orderEntries.length > 0) provider.order = orderEntries;
 		log(`injecting auto routing (config scope=${resolved.scope}): ${JSON.stringify(provider)}`);
 		return { ...payload, provider };
 	});

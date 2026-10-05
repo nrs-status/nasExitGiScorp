@@ -43,11 +43,12 @@ one).
 | `/openrouter block <slug>` | Blacklist `<slug>` from automatic selection. |
 | `/openrouter unblock <slug>` | Remove `<slug>` from the blacklist. |
 | `/openrouter blocked` | Show the blacklist. |
-| `/openrouter config` (alias: `routing`) | Show the routing the configuration file declares for the current model: the applicable scope (`model` or `global`), the preferred provider order, and the blacklisted providers. |
+| `/openrouter config` (alias: `routing`) | Show the routing the configuration file declares for the current model: the applicable scope (`model` or `global`), the preferred provider order, the blacklisted providers, the allowlisted providers, and the precision (quantization) filters. |
 
 The status area shows `⇢ <Provider>` (and ` · pin:<slug>` when pinned, plus
-` · blacklisted:<n>` when providers are blacklisted) while an OpenRouter model
-is active.
+` · blacklisted:<n>` / ` · order:<n>` / ` · only:<n>` / ` · quants:<n>` for the
+effective blacklist, configured preferred order, allowlist, and precision
+filter while in automatic mode) while an OpenRouter model is active.
 
 The interactive picker (and `/openrouter list`) shows, per provider: the
 model's precision (quantization, e.g. `[fp8]`) at that endpoint when known,
@@ -64,9 +65,10 @@ block|unblock|blocked`.
 `/openrouter config` reports what the configuration file (see below) applies
 to the active model: the file path and the scope that won (`model`-specific
 table or `[global]`), followed by the preferred providers (in the order they
-are tried) and the blacklisted providers. It reflects the configuration file
-only — session state such as an interactive pin or providers blocked via the
-picker is reported by `/openrouter status` and `/openrouter blocked` instead.
+are tried), the blacklisted providers, the allowlisted providers, and the
+effective precision filters. It reflects the configuration file only — session
+state such as an interactive pin or providers blocked via the picker is
+reported by `/openrouter status` and `/openrouter blocked` instead.
 
 ## Configuration file
 
@@ -81,17 +83,43 @@ blacklist = ["chutes"]
 [models."z-ai/glm-5.3-flash"]           # per-model override (exact model id)
 preferred = ["moonshotai"]
 blacklist = []
+
+[models."qwen/qwen3-coder-next"]
+allowlist = ["deepinfra", "novita"]     # ONLY these providers may serve
+precision_allowlist = ["fp8"]           # hard precision (quantization) filter
+precision_blacklist = ["fp4", "int4"]   # alternative: all-but-these filter
+precision_preferred = ["fp8", "bf16"]   # soft: tried first when available
 ```
 
-Both the global table and each per-model table accept the same two keys:
-`preferred` (providers tried sequentially in list order, injected as
-`provider.order`) and `blacklist` (providers excluded from automatic
-selection, injected as `provider.ignore`). A model-specific table has higher
-precedence than the global one: each key it sets replaces the global value,
-while keys it omits are inherited from `[global]` (an explicit empty list
-disables the global list for that key). An interactive pin
-(`/openrouter pin`) overrides the file; in automatic mode the session
-blacklist (picker toggles, `block`) is unioned with the effective blacklist.
+Both the global table and each per-model table accept the same keys:
+
+- `preferred` — providers tried sequentially in list order, injected as
+  `provider.order`.
+- `blacklist` — providers excluded from automatic selection, injected as
+  `provider.ignore`.
+- `allowlist` — providers allowed **exclusively** (nothing else may serve the
+  request), injected as `provider.only`; OpenRouter may still fall back among
+  the allowed providers. It does not make `blacklist` redundant: the blacklist
+  prunes entries from within the allowed set.
+- `precision_allowlist` — precisions (OpenRouter quantization labels: `fp4`,
+  `fp8`, `fp16`, `bf16`, `int4`, `int8`, `unknown`, …) the request may be
+  served with, injected verbatim as `provider.quantizations`.
+- `precision_blacklist` — precisions to exclude, injected as their complement
+  within the known quantization set (OpenRouter has no negative quantization
+  filter). If both a precision allowlist and a precision blacklist apply, the
+  allowlist wins and the blacklist is ignored.
+- `precision_preferred` — a soft preference: the cheapest endpoint serving the
+  model at each preferred precision (looked up in the model's endpoints data)
+  is prepended to `provider.order` as a quantization-qualified tag such as
+  `deepinfra/fp8`. Entries no endpoint serves are skipped.
+
+A model-specific table has higher precedence than the global one: each key it
+sets replaces the global value, while keys it omits are inherited from
+`[global]` (an explicit empty list disables the global list for that key). If
+the effective configuration resolves to nothing, the request payload is left
+untouched. An interactive pin (`/openrouter pin`) overrides the file; in
+automatic mode the session blacklist (picker toggles, `block`) is unioned with
+the effective blacklist.
 
 Provider names must be OpenRouter's exact routing slugs (as shown by
 `/openrouter list` and the picker, e.g. `open-inference`): OpenRouter silently
@@ -138,4 +166,10 @@ The configuration-file feature has its own end-to-end suite:
 
 ```bash
 python3 test/config_test.py
+```
+
+So does the allowlist / precision-filtering feature:
+
+```bash
+python3 test/allowlist_precision_test.py
 ```
