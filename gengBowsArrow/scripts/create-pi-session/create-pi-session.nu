@@ -10,10 +10,15 @@
 # having a task underway via `taskmux start` (description: the new branch's
 # name).
 #
+# The script also creates a `metadata' directory in the new worktree, so the
+# pi session file can be tracked by the repo: pi is started with
+# `--session ./metadata/session.jsonl'.
+#
 # instructions.txt is written in the *current directory* (not in the worktree)
 # so that editor completion offers paths relative to the directory the script
 # was called from.
-#   1. `pi "Read and execute ./instructions.txt" --model <MODEL>`
+#   1. `pi "Read and execute ./instructions.txt" --model <MODEL> \
+#        --session ./metadata/session.jsonl`
 #   2. a plain shell at the new worktree
 #
 # The model may be given as the optional second argument; if omitted, it is
@@ -109,6 +114,12 @@ def main [branch: string, model?: string] {
     # relative to the call site); now that the worktree exists, move it in.
     mv instructions.txt $"($wt_path)/instructions.txt"
 
+    # --- 5b. Create the metadata directory in the new worktree -----------------
+    # The pi session file lives at ./metadata/session.jsonl inside the
+    # worktree so that it is tracked by the repo; its parent directory must
+    # exist before pi starts.
+    mkdir $"($wt_path)/metadata"
+
     # --- 6. Prepare the tmux session and its two windows -----------------------
     # sesh names sessions after the directory basename with dots replaced by
     # underscores; pre-create the session (detached) with its two windows so
@@ -116,7 +127,10 @@ def main [branch: string, model?: string] {
     let session = ($wt_path | path basename | str replace -a "." "_")
     let has = (do { tmux has-session -t $session } | complete)
     if $has.exit_code != 0 {
-        let pi_cmd = $"pi \"Read and execute ./instructions.txt\" --model '($model)'"
+        # `--session' points pi at a session file inside the worktree's
+        # `metadata' directory (created in step 5b) so it is tracked by the
+        # repo.
+        let pi_cmd = $"pi \"Read and execute ./instructions.txt\" --model '($model)' --session ./metadata/session.jsonl"
         # Window 1: pi, primed with the instructions prompt and the given model
         ^tmux new-session -d -s $session -c $wt_path -n pi $pi_cmd
         # Window 2: a plain shell at the worktree

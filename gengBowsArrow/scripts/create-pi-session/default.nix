@@ -2,10 +2,12 @@
 # create-pi-session <GIT BRANCH NAME> [<MODEL NAME>]: creates instructions.txt
 # in the current directory with neovim (so editor completion is relative to the
 # call site), creates a git worktree (via worktrunk's `wt switch --create`),
-# moves instructions.txt into it, then opens a tmux session (via `sesh connect`)
-# containing two windows: one running `pi "Read and execute ./instructions.txt"`
-# with the model (optional second argument or DEFAULT_PI_MODEL environment
-# variable), and one plain shell at the new worktree. As soon as the new tmux
+# creates a `metadata' directory in the worktree, moves instructions.txt into
+# it, then opens a tmux session (via `sesh connect`) containing two windows: one
+# running `pi "Read and execute ./instructions.txt"` with the model (optional
+# second argument or DEFAULT_PI_MODEL environment variable) and
+# `--session ./metadata/session.jsonl` (so the session file is tracked by the
+# repo), and one plain shell at the new worktree. As soon as the new tmux
 # session is created, it is marked as having a task underway via `taskmux
 # start' (description: the new branch's name).
 let
