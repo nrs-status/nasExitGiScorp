@@ -92,7 +92,17 @@ while keys it omits are inherited from `[global]` (an explicit empty list
 disables the global list for that key). An interactive pin
 (`/openrouter pin`) overrides the file; in automatic mode the session
 blacklist (picker toggles, `block`) is unioned with the effective blacklist.
-A commented reference example ships with the package as `config.example.toml`
+
+Provider names must be OpenRouter's exact routing slugs (as shown by
+`/openrouter list` and the picker, e.g. `open-inference`): OpenRouter silently
+ignores unknown slugs in `provider.order`/`provider.ignore`, so the extension
+validates configured and pinned names against the routing slugs it has seen
+and flags entries that look like a typo for a known slug (warning notification
+with a "did you mean" suggestion, plus the debug log). Entries matching
+nothing at all are only debug-logged: endpoint lists are per model, so a
+global blacklist may legitimately name providers that do not serve the
+currently active model. Entries are never rewritten and never rejected. A commented reference example ships
+with the package as `config.example.toml`
 (it is never read by the extension — the path comes from the environment
 variable).
 See [SPEC.md](./SPEC.md) section 5.1 for the full semantics.

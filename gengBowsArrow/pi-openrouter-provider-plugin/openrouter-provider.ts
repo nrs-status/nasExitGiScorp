@@ -25,7 +25,14 @@
  *      selection mode: in the `/openrouter` picker, pressing shift+enter on
  *      a menu item toggles (blacklists) it instead of pinning it. A
  *      blacklisted provider is excluded from OpenRouter's automatic
- *      provider choice via the `provider.ignore` routing field.
+ *      provider choice via the `provider.ignore` routing field. OpenRouter
+ *      silently ignores unknown routing slugs, so configured and pinned
+ *      provider references are validated against the exact slugs reported
+ *      by the endpoints API: an entry that looks like a typo for a known
+ *      slug is loudly reported (warning notification with a "did you mean"
+ *      suggestion), while entries matching nothing at all are only
+ *      debug-logged — endpoint lists are per model, so a provider absent
+ *      from the active model's list may well serve other models.
  *   5. Reads an optional TOML configuration file (path taken from the
  *      PI_OPENROUTER_EXTENSION_CONFIG_FILE environment variable) that
  *      declaratively prefers and/or blacklists providers, globally and/or
@@ -108,6 +115,23 @@ let keyResolved = false;
 let tapInstalled = false;
 let api: ExtensionAPI | undefined;
 let endpointsCache: { modelId: string; fetchedAt: number; endpoints: EndpointInfo[] } | undefined;
+/**
+ * Alias index for provider-slug *validation* and suggestions: for every
+ * endpoint seen on the endpoints API it records the exact routing slug in
+ * `knownSlugs`, and indexes naming variants (normalized slug, display name,
+ * tag prefix) in `slugSuggestions` so a mistyped reference can be reported
+ * with a "did you mean" hint. OpenRouter's `provider.order` /
+ * `provider.ignore` routing only understands the exact routing slugs (e.g.
+ * `open-inference`) and **silently ignores unknown ones** — so configured
+ * slugs are never rewritten; instead, entries that match no known slug are
+ * loudly reported (notification + log) rather than silently ineffective.
+ */
+const knownSlugs = new Set<string>();
+const slugSuggestions = new Map<string, string>();
+/** Probable typos already reported, to avoid notification spam. */
+const warnedSlugs = new Set<string>();
+/** Id of the model the known slugs were (last) learned from, for log lines. */
+let knownSlugsModelId: string | undefined;
 
 function log(message: string): void {
 	if (!DEBUG_LOG) return;
@@ -129,6 +153,73 @@ function hostOf(url: string | undefined): string {
 	} catch {
 		return "";
 	}
+}
+
+/** Normalize a provider-slug-ish string: lowercase, only [a-z0-9]. */
+function normalizeSlug(value: string): string {
+	return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Record the endpoints' exact routing slugs and naming variants. */
+function learnKnownSlugs(modelId: string | undefined, endpoints: EndpointInfo[]): void {
+	if (modelId) knownSlugsModelId = modelId;
+	for (const endpoint of endpoints) {
+		if (endpoint.slug) knownSlugs.add(endpoint.slug);
+		for (const candidate of [endpoint.slug, endpoint.name, endpoint.tag.split("/")[0]]) {
+			if (!candidate) continue;
+			const key = normalizeSlug(candidate);
+			if (key && !slugSuggestions.has(key)) slugSuggestions.set(key, endpoint.slug);
+		}
+	}
+}
+
+/**
+ * Report configured provider references that look like *typos*: an entry that
+ * matches no known routing slug exactly, but does match one under
+ * normalization (e.g. "openinference" vs "open-inference") is reported as a
+ * warning notification with a "did you mean" hint, because OpenRouter would
+ * silently ignore it and the intended block/order would not happen.
+ *
+ * Entries that match nothing at all are only debug-logged: endpoint lists are
+ * **per model**, while configuration (especially the global blacklist) can
+ * name providers that serve other models — absence from the active model's
+ * endpoint list is therefore not evidence of a mistake, and OpenRouter
+ * harmlessly ignores such entries there. Skipped entirely while nothing is
+ * known (the endpoints lookup has not succeeded yet). Probable typos are
+ * reported once per slug.
+ */
+function warnUnknownSlugs(ctx: ExtensionContext, entries: string[], what: string): void {
+	if (knownSlugs.size === 0) return;
+	for (const entry of entries) {
+		if (knownSlugs.has(entry)) continue;
+		const suggestion = slugSuggestions.get(normalizeSlug(entry));
+		if (!suggestion) {
+			log(
+				`provider slug "${entry}" (${what}) is not among the ${knownSlugs.size} slugs known so far ` +
+					`(endpoint lists are per model; last learned from ${knownSlugsModelId ?? "?"})`,
+			);
+			continue;
+		}
+		if (warnedSlugs.has(entry)) continue;
+		warnedSlugs.add(entry);
+		log(`unknown provider slug in ${what}: "${entry}" — did you mean "${suggestion}"?`);
+		safeUi(ctx, (ui) =>
+			ui.notify(
+				`OpenRouter: "${entry}" (${what}) looks like a typo for "${suggestion}" and will be ignored by routing`,
+				"warning",
+			),
+		);
+	}
+}
+
+/** Warn about every unknown slug in the effective routing configuration. */
+function warnConfiguredSlugs(ctx: ExtensionContext): void {
+	const resolved = resolveConfig(ctx.model?.id);
+	if (resolved.config) {
+		warnUnknownSlugs(ctx, resolved.config.preferred ?? [], `${resolved.scope} config preferred`);
+		warnUnknownSlugs(ctx, resolved.config.blacklist ?? [], `${resolved.scope} config blacklist`);
+	}
+	warnUnknownSlugs(ctx, blacklist, "session blacklist");
 }
 
 function isOpenRouterModel(model: ExtensionContext["model"]): boolean {
@@ -329,10 +420,52 @@ function resolveConfig(modelId: string | undefined): { scope: ConfigScope; confi
 	return { scope: "none" };
 }
 
-/** The effective ignore list for automatic mode: config ∪ session blacklist. */
+/**
+ * The effective ignore list for automatic mode: config ∪ session blacklist.
+ * Entries are injected exactly as configured — unknown slugs are reported
+ * (see warnUnknownSlugs) instead of rewritten.
+ */
 function effectiveIgnore(modelId: string | undefined): string[] {
 	const configured = resolveConfig(modelId).config?.blacklist ?? [];
 	return [...new Set([...configured, ...blacklist])];
+}
+
+let slugAliasPrefetch: Promise<void> | undefined;
+
+/**
+ * (Re-)fetch the endpoints of the active model to (re-)learn the known
+ * routing slugs. Concurrent calls share one request; the endpoints cache
+ * keeps repeats cheap. Never throws.
+ */
+function prefetchSlugAliases(ctx: ExtensionContext): Promise<void> {
+	if (!slugAliasPrefetch) {
+		slugAliasPrefetch = getEndpoints(ctx)
+			.then((endpoints) => {
+				learnKnownSlugs(ctx.model?.id, endpoints);
+				// Now that the routing slugs are known, configured entries that
+				// match none of them can be flagged (they would be silently
+				// ignored by OpenRouter otherwise).
+				warnConfiguredSlugs(ctx);
+				// The validated ignore list (and therefore its reported count)
+				// may be final only now.
+				renderStatus(ctx);
+			})
+			.catch((error) => log(`slug prefetch failed: ${String(error)}`))
+			.finally(() => {
+				slugAliasPrefetch = undefined;
+			});
+	}
+	return slugAliasPrefetch;
+}
+
+/**
+ * Make sure slug validation has the endpoints API's slugs available: wait for
+ * an in-flight (or freshly started) prefetch, at most briefly, so a request
+ * can never be delayed significantly.
+ */
+async function ensureSlugAliases(ctx: ExtensionContext): Promise<void> {
+	if (knownSlugs.size > 0) return;
+	await Promise.race([prefetchSlugAliases(ctx), sleep(4000)]);
 }
 
 /**
@@ -472,6 +605,7 @@ async function getEndpoints(ctx: ExtensionContext): Promise<EndpointInfo[]> {
 	if (!response.ok) throw new Error(`OpenRouter endpoints request failed: HTTP ${response.status}`);
 	const json = (await response.json()) as { data?: { endpoints?: unknown[] } };
 	const endpoints = parseEndpoints(json);
+	learnKnownSlugs(model.id, endpoints);
 	endpointsCache = { modelId: model.id, fetchedAt: now, endpoints };
 	return endpoints;
 }
@@ -881,6 +1015,7 @@ export default function (pi: ExtensionAPI): void {
 		if (isOpenRouterModel(ctx.model)) {
 			await ensureKey(ctx);
 			installStreamTap(pi, ctx);
+			prefetchSlugAliases(ctx);
 		}
 		renderStatus(ctx);
 		log(`session start: model=${ctx.model?.id} routing=${JSON.stringify(routing)} blacklist=${JSON.stringify(blacklist)}`);
@@ -894,6 +1029,7 @@ export default function (pi: ExtensionAPI): void {
 		if (isOpenRouterModel(ctx.model)) {
 			await ensureKey(ctx);
 			installStreamTap(pi, ctx);
+			prefetchSlugAliases(ctx);
 		}
 		renderStatus(ctx);
 	});
@@ -911,7 +1047,7 @@ export default function (pi: ExtensionAPI): void {
 		renderStatus(ctx);
 	});
 
-	pi.on("before_provider_request", (event, ctx) => {
+	pi.on("before_provider_request", async (event, ctx) => {
 		if (!isOpenRouterModel(ctx.model)) return;
 		log(
 			`request: model=${ctx.model?.id} routing=${JSON.stringify(routing)} blacklist=${JSON.stringify(blacklist)} ` +
@@ -924,6 +1060,8 @@ export default function (pi: ExtensionAPI): void {
 				? (payload.provider as Record<string, unknown>)
 				: {};
 		if (routing.mode === "pin" && routing.provider) {
+			await ensureSlugAliases(ctx);
+			warnUnknownSlugs(ctx, [routing.provider], "pin");
 			const provider: Record<string, unknown> = {
 				...existing,
 				only: [routing.provider],
@@ -941,6 +1079,11 @@ export default function (pi: ExtensionAPI): void {
 		const order = resolved.config?.preferred ?? [];
 		const ignore = effectiveIgnore(ctx.model?.id);
 		if (order.length === 0 && ignore.length === 0) return;
+		// Slug validation needs the routing slugs from the endpoints API; a
+		// request that races the prefetch waits for it briefly (see above).
+		await ensureSlugAliases(ctx);
+		if (order.length > 0) warnUnknownSlugs(ctx, order, `${resolved.scope} config preferred`);
+		warnUnknownSlugs(ctx, ignore, "effective blacklist");
 		const provider: Record<string, unknown> = {
 			...existing,
 			allow_fallbacks: true,
