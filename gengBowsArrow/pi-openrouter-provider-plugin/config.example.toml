@@ -22,10 +22,12 @@
 #                       (sent to OpenRouter as provider.ignore)
 #
 # Precedence: a [models] table for the active model wins over [global]
-# entirely — the two are never merged per key. An interactive pin
+# per key — each key it sets replaces the global value, while keys it
+# omits are inherited from [global] (an explicit `blacklist = []` or
+# `preferred = []` disables the global list for that key). An interactive pin
 # (/openrouter pin, or the picker) overrides the file; /openrouter auto
 # returns to it. The interactive session blacklist (picker toggles,
-# /openrouter block) is combined with (unioned into) the file's blacklist.
+# /openrouter block) is combined with (unioned into) the effective blacklist.
 #
 # Provider slugs must match OpenRouter's provider slugs (see
 # /openrouter list). Slugs are case-insensitive; duplicates are dropped.
@@ -42,9 +44,13 @@ blacklist = ["chutes"]
 # status or pi's /model command; quote keys containing "." or "/".
 preferred = ["moonshotai", "deepinfra"]
 blacklist = []
-# Because this table exists, the [global] table above is ignored entirely
-# for this model — even the keys it does not set.
+# This table sets both keys, so nothing is inherited from [global] here —
+# including an empty blacklist, which exempts this model from the global
+# "chutes" blacklist. A table that set only `preferred` would inherit the
+# global blacklist instead.
 
 [models."anthropic/claude-fable-latest"]
-# A table may set only one key; the other is simply empty.
+# A table may set only one key; the other is inherited from [global].
 blacklist = ["wafer"]
+# Because this table does not set `preferred`, the [global] preferred order
+# applies to this model as well.

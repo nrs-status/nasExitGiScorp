@@ -87,10 +87,11 @@ Both the global table and each per-model table accept the same two keys:
 `preferred` (providers tried sequentially in list order, injected as
 `provider.order`) and `blacklist` (providers excluded from automatic
 selection, injected as `provider.ignore`). A model-specific table has higher
-precedence than the global one: when one exists for the active model, the
-global configuration is ignored entirely. An interactive pin
+precedence than the global one: each key it sets replaces the global value,
+while keys it omits are inherited from `[global]` (an explicit empty list
+disables the global list for that key). An interactive pin
 (`/openrouter pin`) overrides the file; in automatic mode the session
-blacklist (picker toggles, `block`) is unioned with the file's blacklist.
+blacklist (picker toggles, `block`) is unioned with the effective blacklist.
 A commented reference example ships with the package as `config.example.toml`
 (it is never read by the extension — the path comes from the environment
 variable).

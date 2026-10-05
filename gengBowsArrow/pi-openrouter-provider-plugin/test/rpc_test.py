@@ -40,7 +40,17 @@ class PiRpc:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env={**os.environ, "PI_OPENROUTER_PROVIDER_LOG": log_path},
+            # Hermetic: a globally exported routing config must not leak into
+            # the test scenarios (it would change what is injected and what
+            # the footer status shows).
+            env={
+                **{
+                    k: v
+                    for k, v in os.environ.items()
+                    if k != "PI_OPENROUTER_EXTENSION_CONFIG_FILE"
+                },
+                "PI_OPENROUTER_PROVIDER_LOG": log_path,
+            },
         )
         self.events: list[dict] = []
         self._lock = threading.Lock()

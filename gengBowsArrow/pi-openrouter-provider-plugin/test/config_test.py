@@ -6,8 +6,10 @@ Drives pi in RPC mode with PI_OPENROUTER_EXTENSION_CONFIG_FILE pointing at a
 TOML file and checks, via the extension's debug log, what is injected into
 the outgoing request payload:
 
-  1. model-specific scope: a `[models."<id>"]` table applies, and the
-     `[global]` table is ignored entirely (not merged per key);
+  1. model-specific scope: a `[models."<id>"]` table applies; the keys it
+     sets replace the global values, and keys it omits are inherited from
+     `[global]` (an explicit empty list disables the global list for that
+     key);
   2. global scope: with no model-specific table for the active model, the
      `[global]` preferred/blacklist lists apply;
   3. invalid TOML: the file is rejected as a whole, the extension stays
@@ -49,6 +51,10 @@ class ConfigRpc(PiRpc):
         }
         if config_path is not None:
             env["PI_OPENROUTER_EXTENSION_CONFIG_FILE"] = config_path
+        else:
+            # Hermetic: a globally exported PI_OPENROUTER_EXTENSION_CONFIG_FILE
+            # must not leak into the "no configuration file" scenarios.
+            env.pop("PI_OPENROUTER_EXTENSION_CONFIG_FILE", None)
         self.log_path = log_path
         self.proc = subprocess.Popen(
             ["pi", "--mode", "rpc", "--no-extensions", "-e", EXTENSION, "--no-session"],
@@ -122,10 +128,10 @@ def main() -> int:
     s0, s1, s2 = (slugs + ["deepinfra", "together", "moonshotai"])[:3]
     prompt = "Reply with exactly: ok"
 
-    # ---- Scenario 1: model-specific scope wins, global ignored entirely ----
-    # The global list contains synthetic slugs; if the global table were
-    # merged (or applied), they would leak into the injected payload. The
-    # model table sets both keys, so this also exercises a full override.
+    # ---- Scenario 1: model-specific scope overrides the keys it sets -----
+    # The global list contains synthetic slugs; the model table sets both
+    # keys, so the global values must not leak into the injected payload
+    # (a full override, with nothing to inherit).
     config_1 = f"""\
 # comment handling
 [global]
@@ -146,8 +152,8 @@ blacklist = ["fake-model-blocked"]
         f"model-specific preferred order injected: {injections(log1)[:1]}",
     )
     check('"ignore":["fake-model-blocked"]' in flat1, "model-specific blacklist injected")
-    check("fake-global-a" not in flat1, "global preferred list ignored when a model table exists")
-    check("fake-global-blocked" not in flat1, "global blacklist ignored when a model table exists")
+    check("fake-global-a" not in flat1, "global preferred list overridden by the model table")
+    check("fake-global-blocked" not in flat1, "global blacklist overridden by the model table")
     check('"allow_fallbacks":true' in flat1, "config-driven routing keeps fallbacks allowed")
     check("config scope=model" in log1, "log reports model scope")
 
@@ -199,6 +205,37 @@ preferred = ["fake-never-applied"]
     log7 = run_scenario("missing-file", None, "/tmp/pi-openrouter-config-does-not-exist.toml", [prompt])
     check(not injections(log7), "missing config file injects nothing")
     check("config file ignored" in log7, "missing config file logged and ignored")
+
+    # ---- Scenario 10: model table omits `blacklist` → inherits it ---------
+    config_10 = f"""\
+[global]
+blacklist = ["fake-global-blocked"]
+
+[models."{MODEL_ID}"]
+preferred = ["{s0}"]
+"""
+    log10 = run_scenario("inherit-blacklist", config_10, CONFIG_PATH, [prompt])
+    flat10 = "".join(request_lines(log10)).replace(" ", "")
+    check(f'"order":["{s0}"]' in flat10, f"model preferred order injected: {injections(log10)[:1]}")
+    check(
+        '"ignore":["fake-global-blocked"]' in flat10,
+        f"global blacklist inherited when the model table omits it: {injections(log10)[:1]}",
+    )
+
+    # ---- Scenario 11: explicit empty blacklist disables the inherited one -
+    config_11 = f"""\
+[global]
+blacklist = ["fake-global-blocked"]
+
+[models."{MODEL_ID}"]
+preferred = ["{s0}"]
+blacklist = []
+"""
+    log11 = run_scenario("empty-blacklist-override", config_11, CONFIG_PATH, [prompt])
+    flat11 = "".join(request_lines(log11)).replace(" ", "")
+    check(f'"order":["{s0}"]' in flat11, "model preferred order injected with explicit empty blacklist")
+    check("fake-global-blocked" not in flat11, "explicit empty blacklist disables the global blacklist")
+    check('"ignore"' not in flat11, "no ignore field injected with explicit empty blacklist")
 
     # ---- Scenario 8: /openrouter status reports the configuration file ----
     status_log = "/tmp/pi-openrouter-config-test-status.log"

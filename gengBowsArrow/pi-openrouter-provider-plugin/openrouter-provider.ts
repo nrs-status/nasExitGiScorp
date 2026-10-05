@@ -29,7 +29,8 @@
  *   5. Reads an optional TOML configuration file (path taken from the
  *      PI_OPENROUTER_EXTENSION_CONFIG_FILE environment variable) that
  *      declaratively prefers and/or blacklists providers, globally and/or
- *      per model. See SPEC.md section 5.1. TOML parsing and SSE framing are
+ *      per model. A per-model table overrides the keys it sets; keys it
+ *      omits are inherited from the [global] table. See SPEC.md 5.1. TOML parsing and SSE framing are
  *      provided by runtime dependencies (smol-toml, eventsource-parser).
  *
  * Usage:
@@ -217,16 +218,18 @@ async function ensureKey(ctx: ExtensionContext): Promise<string | undefined> {
 //   preferred = ["slug-a", "slug-b"]   → provider.order (tried in list order)
 //   blacklist = ["slug-c"]             → provider.ignore
 //
-// A model-specific table has higher precedence than the global one: if a
-// table exists for the active model id, the global table is ignored
-// entirely. See SPEC.md section 5.1.
+// A model-specific table overrides the global one per key: each key it sets
+// replaces the global value for that model, while keys it omits are
+// inherited from the `[global]` table (an explicit `blacklist = []` or
+// `preferred = []` disables the global list for that key). See SPEC.md
+// section 5.1.
 // ---------------------------------------------------------------------------
 
 interface ProviderRoutingConfig {
 	/** Providers tried sequentially, in list order (provider.order). */
-	preferred: string[];
+	preferred?: string[];
 	/** Providers excluded from automatic selection (provider.ignore). */
-	blacklist: string[];
+	blacklist?: string[];
 }
 
 interface FileConfig {
@@ -255,10 +258,10 @@ function sanitizeConfigSlugs(value: unknown, what: string): string[] {
 }
 
 function extractRoutingTable(raw: unknown, what: string): ProviderRoutingConfig {
-	if (raw === undefined) return { preferred: [], blacklist: [] };
+	if (raw === undefined) return {};
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${what} must be a table`);
 	const table = raw as Record<string, unknown>;
-	const config: ProviderRoutingConfig = { preferred: [], blacklist: [] };
+	const config: ProviderRoutingConfig = {};
 	if (table.preferred !== undefined) config.preferred = sanitizeConfigSlugs(table.preferred, `${what}.preferred`);
 	if (table.blacklist !== undefined) config.blacklist = sanitizeConfigSlugs(table.blacklist, `${what}.blacklist`);
 	return config;
@@ -302,14 +305,27 @@ type ConfigScope = "model" | "global" | "none";
 
 /**
  * The routing configuration that applies to `modelId`: the model-specific
- * table when one exists (it wins over the global table entirely), otherwise
- * the global table, otherwise nothing.
+ * table when one exists, with each key it omits inherited from the global
+ * table; otherwise the global table; otherwise nothing.
  */
 function resolveConfig(modelId: string | undefined): { scope: ConfigScope; config?: ProviderRoutingConfig } {
 	if (!fileConfig || !modelId) return { scope: "none" };
 	const modelSpecific = fileConfig.models.get(modelId);
-	if (modelSpecific) return { scope: "model", config: modelSpecific };
-	if (fileConfig.global) return { scope: "global", config: fileConfig.global };
+	if (modelSpecific) {
+		return {
+			scope: "model",
+			config: {
+				preferred: modelSpecific.preferred ?? fileConfig.global?.preferred ?? [],
+				blacklist: modelSpecific.blacklist ?? fileConfig.global?.blacklist ?? [],
+			},
+		};
+	}
+	if (fileConfig.global) {
+		return {
+			scope: "global",
+			config: { preferred: fileConfig.global.preferred ?? [], blacklist: fileConfig.global.blacklist ?? [] },
+		};
+	}
 	return { scope: "none" };
 }
 
