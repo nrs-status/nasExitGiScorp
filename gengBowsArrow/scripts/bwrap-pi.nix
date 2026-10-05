@@ -11,5 +11,5 @@ ${localPkgs.scripts.bwrap-wpath}/bin/bwrap-wpath \
 	--ro-bind /run/secrets/keys/openrouter /run/secrets/keys/openrouter \
 	--bind $HOME/.pi $HOME/.pi \
 	--bind $PWD $PWD \
-	pi "read and execute $PWD/instructions.txt"
+	pi "read and execute $PWD/metadata/instructions.txt"
 ''

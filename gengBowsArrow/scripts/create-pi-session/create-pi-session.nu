@@ -3,8 +3,8 @@
 #
 # Creates instructions.txt in the current directory with neovim, then creates
 # a new git worktree (via `wt switch --create`) based on the current branch,
-# moves instructions.txt into it, and opens a tmux session (via `sesh
-# connect`) containing two windows:
+# moves instructions.txt into it at `metadata/instructions.txt', and opens a
+# tmux session (via `sesh connect`) containing two windows:
 #
 # As soon as the new tmux session is created, the session is marked as
 # having a task underway via `taskmux start` (description: the new branch's
@@ -12,12 +12,14 @@
 #
 # The script also creates a `metadata' directory in the new worktree, so the
 # pi session file can be tracked by the repo: pi is started with
-# `--session ./metadata/session.jsonl'.
+# `--session ./metadata/session.jsonl'. instructions.txt itself is moved into
+# that same `metadata' directory (`$REPO_ROOT/metadata/instructions.txt') so
+# it is tracked by the repo too.
 #
 # instructions.txt is written in the *current directory* (not in the worktree)
 # so that editor completion offers paths relative to the directory the script
 # was called from.
-#   1. `pi "Read and execute ./instructions.txt" --model <MODEL> \
+#   1. `pi "Read and execute ./metadata/instructions.txt" --model <MODEL> \
 #        --session ./metadata/session.jsonl`
 #   2. a plain shell at the new worktree
 #
@@ -111,14 +113,14 @@ def main [branch: string, model?: string] {
 
     # --- 5. Move instructions.txt into the new worktree ------------------------
     # The file was written in the current directory (for editor completion
-    # relative to the call site); now that the worktree exists, move it in.
-    mv instructions.txt $"($wt_path)/instructions.txt"
-
-    # --- 5b. Create the metadata directory in the new worktree -----------------
+    # relative to the call site); now that the worktree exists, move it into
+    # its final location `$REPO_ROOT/metadata/instructions.txt' so it is
+    # tracked by the repo alongside the session file.
     # The pi session file lives at ./metadata/session.jsonl inside the
-    # worktree so that it is tracked by the repo; its parent directory must
-    # exist before pi starts.
+    # worktree so that it is tracked by the repo; the metadata directory must
+    # exist before pi starts, and before instructions.txt is moved into it.
     mkdir $"($wt_path)/metadata"
+    mv instructions.txt $"($wt_path)/metadata/instructions.txt"
 
     # --- 6. Prepare the tmux session and its two windows -----------------------
     # sesh names sessions after the directory basename with dots replaced by
@@ -130,7 +132,7 @@ def main [branch: string, model?: string] {
         # `--session' points pi at a session file inside the worktree's
         # `metadata' directory (created in step 5b) so it is tracked by the
         # repo.
-        let pi_cmd = $"pi \"Read and execute ./instructions.txt\" --model '($model)' --session ./metadata/session.jsonl"
+        let pi_cmd = $"pi \"Read and execute ./metadata/instructions.txt\" --model '($model)' --session ./metadata/session.jsonl"
         # Window 1: pi, primed with the instructions prompt and the given model
         ^tmux new-session -d -s $session -c $wt_path -n pi $pi_cmd
         # Window 2: a plain shell at the worktree
